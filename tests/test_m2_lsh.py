@@ -2,7 +2,12 @@
 Unit tests for Module 2: Feature Extraction & MinHash + LSH Similarity Clustering Engine (src/modules/m2_lsh_clustering.py).
 """
 
+import os
+import sys
 import pytest
+
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+
 from src.modules.m1_sampling import RegionSamplingEngine
 from src.modules.m2_lsh_clustering import MinHashLSHClusteringEngine, SimilarityCluster, UnionFind
 from src.workload.page_generator import Page, SyntheticWorkloadGenerator, PAGE_SIZE
