@@ -1,0 +1,18 @@
+\begin{table*}[t]
+\centering
+\caption{Architectural and Quantitative Comparison with Published Literature Baselines}
+\label{tab:baseline_comparison}
+\small
+\begin{tabular}{p{2.6cm}p{2.2cm}p{3.2cm}p{3.2cm}p{2.5cm}p{2.5cm}}
+\hline
+\textbf{System} & \textbf{Environment} & \textbf{Candidate Selection} & \textbf{Matching Strategy} & \textbf{Memory Reduction} & \textbf{Primary Limitation} \\
+\hline
+VMware CBPS~\cite{waldspurger2002} & Hypervisor & Periodic full scan & Exact SHA-1 hash & 20--60\% & Exact-match only \\
+Linux KSM~\cite{arcangeli2009} & Kernel & Uniform red-black scan & Exact \texttt{memcmp} & 20--30\% & Misses near-duplicates \\
+UKSM~\cite{xia2018} & Kernel & Hierarchical distilling & Adaptive partial hash & 25--35\% & Exact-match only \\
+Difference Engine~\cite{gupta2008} & Xen Hypervisor & Unguided search & Pairwise delta (\texttt{bsdiff}) & 40--60\% & $O(N^2)$ search overhead \\
+SiLo~\cite{xia2011} & Storage & Locality clustering & MinHash chunking & $\sim$90\% (disk) & Backup storage only \\
+\textbf{AMDEC (Ours)} & Userspace Sim & \textbf{Region stability tiering} & \textbf{MinHash-LSH + Base-Delta} & \textbf{70--75\% (logical)} & Simulation artifact \\
+\hline
+\end{tabular}
+\end{table*}
