@@ -1,3 +1,11 @@
-from .m1_sampling import StabilityTier, RegionSamplingEngine
+from .m1_sampling import StabilityTier, RegionSamplingEngine, PrioritizedCandidate
+from .m2_lsh_clustering import MinHashLSHClusteringEngine, SimilarityCluster, UnionFind
 
-__all__ = ["StabilityTier", "RegionSamplingEngine"]
+__all__ = [
+    "StabilityTier",
+    "RegionSamplingEngine",
+    "PrioritizedCandidate",
+    "MinHashLSHClusteringEngine",
+    "SimilarityCluster",
+    "UnionFind",
+]

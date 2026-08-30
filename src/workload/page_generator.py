@@ -189,8 +189,8 @@ class SyntheticWorkloadGenerator:
                 if member_idx == 0:
                     content = bytearray(base_content)
                 else:
-                    # Near-duplicate with 2% - 8% byte word mutation
-                    mutation_rate = random.uniform(0.02, 0.08)
+                    # Near-duplicate with 0.2% - 1.2% word mutation (1-6 mutated 8-byte fields)
+                    mutation_rate = random.uniform(0.002, 0.012)
                     content = self._mutate_page_content(base_content, mutation_rate=mutation_rate)
 
                 page = Page(
