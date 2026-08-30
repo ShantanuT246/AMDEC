@@ -2,7 +2,10 @@
 ### Adaptive Memory Deduplication using Similarity Clustering
 
 > **Methodology:** Design Science Research (DSR)  
-> **Platform:** macOS, pure userspace simulation (Python + optional C)  
+> **Platform:** macOS, pure userspace simulation  
+> **Engine (Modules 1–3, 5):** C++ (STL + raw arrays in hot paths, xxHash/MurmurHash3, `<chrono>`, CMake, Catch2/GoogleTest)  
+> **Acceleration (Module 4):** C++ with AVX2 SIMD intrinsics + Google Benchmark  
+> **Analysis & Plotting:** Python only (reads CSV output — no algorithm logic)  
 > **Target Output:** Peer-reviewed research paper (Scopus/UGC-CARE indexed) + optional patent filing  
 > **Timeline:** ~10 weeks (adjust start date to your calendar)
 
@@ -149,89 +152,140 @@ Define all tunable parameters **before** experiments — this prevents parameter
 
 > **DSR Step:** Design & Development (Artifact)
 
-### 3.1 Project File Structure
+### 3.1 Language & Tooling Split
+
+| Layer | Language | What it does | Key tools |
+|---|---|---|---|
+| **Core engine** | C++ | Modules 1, 2, 3, 5 — page simulation, sampling/tiering, LSH clustering, base-delta storage, COW reconstruction | STL (`unordered_map`, `vector`, `priority_queue`) for bookkeeping; raw arrays + `memcpy` in hot paths (byte-diff, hash computation) |
+| **Hashing** | C++ | MinHash signature generation | xxHash or MurmurHash3 (header-only, zero-dependency) |
+| **Timing** | C++ | All latency/overhead measurements | `<chrono>` `steady_clock` |
+| **Acceleration** | C++ | Module 4 SIMD benchmark | AVX2 intrinsics for vectorized XOR-diff; Google Benchmark for throughput |
+| **Build** | — | Project build system | CMake (≥ 3.20) |
+| **Testing** | C++ | Unit + integration tests | Catch2 or GoogleTest |
+| **CSV output** | C++ | Export all results | `std::ofstream` — raw CSV, no plotting |
+| **Analysis** | Python | Reads CSV, builds tables & graphs | `pandas`, `numpy`, `matplotlib`, `seaborn` |
+
+> [!NOTE]
+> `datasketch` is **not used** — LSH is implemented natively in C++. Python has zero algorithm logic; it only post-processes output the C++ binary writes to disk.
+
+### 3.2 Project File Structure
 
 ```
 amdec-sim/
+├── CMakeLists.txt                      # Top-level CMake build
 ├── src/
+│   ├── CMakeLists.txt
+│   ├── common/
+│   │   ├── page.hpp                    # Page struct: 4096B content + metadata
+│   │   └── types.hpp                   # Shared typedefs (PageId, Tier, etc.)
 │   ├── workload/
-│   │   └── page_generator.py       # Synthetic anonymous-heap workload
-│   ├── modules/
-│   │   ├── m1_sampling.py          # Region-aware sampler + tiering
-│   │   ├── m2_lsh_clustering.py    # MinHash + LSH + union-find
-│   │   ├── m3_base_delta.py        # Base selection + delta compression
-│   │   ├── m4_acceleration.py      # NumPy + optional C diff benchmarks
-│   │   └── m5_cow_handler.py       # Simulated COW fault + reconstruction
-│   ├── simulator.py                # Discrete-event simulation harness
-│   └── metrics.py                  # Metric collection + export
+│   │   ├── page_generator.hpp
+│   │   └── page_generator.cpp          # Synthetic heap workload; Zipf write distribution
+│   ├── m1_sampling/
+│   │   ├── sampler.hpp
+│   │   └── sampler.cpp                 # Tiering logic + priority queue (STL)
+│   ├── m2_lsh/
+│   │   ├── minhash.hpp                 # MinHash signature; xxHash/MurmurHash3 hot path
+│   │   ├── lsh_index.hpp
+│   │   └── lsh_index.cpp               # LSH banding + bucket table + union-find
+│   ├── m3_delta/
+│   │   ├── base_selector.hpp
+│   │   ├── delta_codec.hpp             # XOR-diff + RLE — raw arrays, no STL in hot path
+│   │   └── delta_store.cpp             # Adaptive thresholding + page table
+│   ├── m4_accel/
+│   │   ├── bench_scalar.cpp            # Baseline scalar diff
+│   │   └── bench_avx2.cpp              # AVX2 vectorized diff (Google Benchmark)
+│   ├── m5_cow/
+│   │   ├── cow_handler.hpp
+│   │   └── cow_handler.cpp             # Write-fault simulation + reconstruction timing
+│   ├── simulator.cpp                   # Discrete-event harness wiring all modules
+│   └── metrics.cpp                     # Metric collection → CSV export
 ├── experiments/
-│   ├── run_full_eval.py            # Main evaluation script
-│   ├── ablation_m1.py              # Module 1 disabled
-│   ├── ablation_adaptive.py        # Fixed vs. adaptive threshold
-│   └── parameter_sweep.py          # Grid search over parameter space
-├── results/
-│   └── raw/                        # CSV outputs from experiments
-├── analysis/
-│   └── plot_results.py             # matplotlib/seaborn charts
+│   ├── run_full_eval.cpp               # Main evaluation binary
+│   ├── ablation_m1.cpp                 # M1 disabled
+│   ├── ablation_adaptive.cpp           # Fixed vs. adaptive threshold
+│   └── parameter_sweep.cpp             # Grid search over parameter space
 ├── tests/
-│   ├── test_m1_sampling.py
-│   ├── test_m2_clustering.py
-│   ├── test_m3_delta.py
-│   └── test_m5_reconstruction.py
+│   ├── test_m1_sampling.cpp
+│   ├── test_m2_lsh.cpp
+│   ├── test_m3_delta.cpp               # Round-trip: reconstruct(base, delta) == original
+│   └── test_m5_cow.cpp
+├── analysis/                           # Python downstream — reads CSV only
+│   ├── plot_results.py                 # matplotlib/seaborn: all paper figures
+│   ├── compare_baselines.py            # Build KSM/UKSM comparison table (pandas)
+│   └── ablation_analysis.py           # Post-hoc ablation stats (numpy)
+├── results/
+│   └── raw/                            # Timestamped CSVs written by C++ binaries
+├── third_party/
+│   ├── xxhash/                         # xxHash header-only
+│   ├── catch2/                         # or googletest
+│   └── benchmark/                      # Google Benchmark
 ├── docs/
 │   ├── INVENTION_DISCLOSURE.md
 │   └── architecture.drawio
-├── paper/                          # LaTeX source
-├── references/                     # PDFs + BibTeX
-├── requirements.txt
+├── paper/                              # LaTeX source
+├── references/                         # PDFs + BibTeX
+├── requirements.txt                    # Python: pandas numpy matplotlib seaborn scipy
 └── README.md
 ```
 
-### 3.2 Week-by-Week Implementation Tasks
+### 3.3 Week-by-Week Implementation Tasks
 
-#### Week 2 — Synthetic Workload + Module 1
+#### Week 2 — CMake Skeleton + Workload Generator + Module 1
 
-- [ ] Implement `page_generator.py`:
-  - Generate N = 10,000–100,000 page objects (4096 bytes each)
-  - Configurable similarity ratio (e.g., 80% near-duplicate, 7% exact, 13% unique)
-  - Zipf-distributed write patterns (`write_count`, `last_write_time`)
-- [ ] Implement `m1_sampling.py` (tiering + priority queue)
-- [ ] Write `tests/test_m1_sampling.py` — verify hot pages are skipped; cold pages are prioritized
-- [ ] **Commit milestone:** `feat: M1 sampling — hot/warm/cold classification working`
+- [ ] Scaffold CMake project: top-level `CMakeLists.txt`, subdirectory targets, add `third_party/` (xxHash header, Catch2 via FetchContent)
+- [ ] Implement `page.hpp` — `Page` struct: `uint8_t content[4096]`, `uint64_t alloc_time`, `uint32_t write_count`, `float write_rate`, `Tier tier`
+- [ ] Implement `page_generator.cpp`:
+  - Generate N = 10,000–100,000 pages with Zipf-distributed write activity
+  - Configurable similarity ratio (80% near-duplicate, 7% exact, 13% unique) — mutate a base template at random byte offsets
+- [ ] Implement `m1_sampling/sampler.cpp` — compute `write_rate = write_count / age`; classify into `HOT / WARM / COLD`; push cold/warm into `std::priority_queue`
+- [ ] Write `tests/test_m1_sampling.cpp` (Catch2) — `REQUIRE` that hot pages are never enqueued; cold pages rank above warm
+- [ ] **Commit milestone:** `feat: CMake build + M1 tiering — hot/warm/cold classification passing Catch2 tests`
 
 #### Week 3 — Module 2 (LSH Clustering)
 
-- [ ] Implement MinHash signature generation (use `datasketch` or custom implementation)
-- [ ] Implement LSH banding + bucket assignment
-- [ ] Implement union-find cluster assembly
-- [ ] Validate on a small hand-crafted dataset (3 near-duplicate pages + 1 unrelated)
-- [ ] Write `tests/test_m2_clustering.py` — verify Jaccard threshold is respected
-- [ ] **Commit milestone:** `feat: M2 LSH clustering — producing cluster output on synthetic heap data`
+- [ ] Implement `m2_lsh/minhash.hpp`:
+  - `computeSignature(const uint8_t* page, size_t K)` — split page into `B`-byte blocks; apply K xxHash seeds per block; take per-position minimum across blocks
+  - **Hot path rule:** raw pointer arithmetic + xxHash; no `std::vector` allocation inside this function
+- [ ] Implement `m2_lsh/lsh_index.cpp`:
+  - Band splitting: group K hashes into `b` bands of `K/b` hashes each
+  - Bucket table: `std::unordered_map<size_t, std::vector<PageId>>` — hash each band → bucket
+  - Union-Find: merge pages sharing ≥ 1 bucket; apply Jaccard threshold `J` to filter false-positive pairs
+- [ ] Validate on 10 hand-crafted pages (3 near-duplicate triplets + 1 unrelated) — inspect cluster output manually
+- [ ] Write `tests/test_m2_lsh.cpp` — assert Jaccard ≥ 0.7 pages cluster together; Jaccard < 0.3 pages don't
+- [ ] **Commit milestone:** `feat: M2 LSH clustering — correct clusters on synthetic heap data`
 
-#### Week 4 — Integration + Review 2 Prep
+#### Week 4 — M1+M2 Integration + Review 2 Prep
 
-- [ ] Run Modules 1+2 end-to-end on full workload (N = 50,000 pages)
-- [ ] Collect preliminary metrics: candidate reduction ratio, cluster size distribution, false-positive rate
+- [ ] Wire `simulator.cpp`: generator → M1 sampler → M2 LSH index → output clusters to stdout/CSV
+- [ ] Run on N = 50,000 pages; collect preliminary metrics: candidate reduction ratio, cluster size distribution, false-positive rate
+- [ ] Export preliminary results to `results/raw/prelim_<timestamp>.csv`
+- [ ] Run `analysis/plot_results.py` on preliminary CSV — generate cluster size histogram for Review 2 slides
 - [ ] Prepare **Review 2 materials** (see checkpoint below)
-- [ ] Begin `m3_base_delta.py`: base selection algorithm
+- [ ] Begin `m3_delta/base_selector.hpp` — base selection interface
 
 > **REVIEW 2 CHECKPOINT — Target: End of Week 4**
 
 #### Week 5 — Module 3 (Base-Delta Storage)
 
-- [ ] Complete base selection (minimize mean byte-distance within cluster)
-- [ ] Implement delta computation: XOR diff + Run-Length Encoding (RLE) of changed byte ranges
-- [ ] Implement adaptive thresholding (fallback if delta > `δ_max`)
-- [ ] Store base+delta pairs in an in-memory page table
-- [ ] Write `tests/test_m3_delta.py` — verify round-trip fidelity: `reconstruct(base, delta) == original`
+- [ ] Implement `m3_delta/base_selector` — choose page with minimum mean byte-distance to cluster peers (or oldest/most-stable as fast fallback)
+- [ ] Implement `m3_delta/delta_codec.hpp` — **hot path: raw arrays only**:
+  ```cpp
+  // XOR two pages into a diff buffer, then RLE-encode runs of zero bytes
+  size_t encodeDelta(const uint8_t* base, const uint8_t* page, uint8_t* out, size_t len);
+  size_t decodeDelta(const uint8_t* base, const uint8_t* delta, uint8_t* out, size_t len);
+  ```
+- [ ] Implement adaptive thresholding: if `delta_size / PAGE_SIZE > δ_max`, skip merging this page (leave uncompressed)
+- [ ] Implement in-memory page table: `std::unordered_map<PageId, PageRecord>` where `PageRecord` is a tagged union (`BasePage` or `DeltaPage`)
+- [ ] Write `tests/test_m3_delta.cpp` — `REQUIRE(decodeDelta(base, encodeDelta(base, page)) == page)` for 1000 random page pairs
 
 #### Week 6 — Module 5 + Full Pipeline Integration
 
-- [ ] Implement `m5_cow_handler.py`: write-fault simulation, reconstruction timing
-- [ ] Wire full pipeline in `simulator.py`: generator → M1 → M2 → M3 → M5
-- [ ] Integration test: write to a merged page, verify private copy is byte-for-byte correct
-- [ ] Optional: implement C diff step, compile with `clang`, call via `ctypes`
-- [ ] **Commit milestone:** `feat: full pipeline — generate → sample → cluster → compress → reconstruct`
+- [ ] Implement `m5_cow/cow_handler.cpp`:
+  - `simulateWrite(PageId id)` — look up page record; if delta-stored, call `decodeDelta`; time with `<chrono> steady_clock`; allocate new private page object; update page table
+- [ ] Wire full pipeline in `simulator.cpp`: generator → M1 → M2 → M3 → M5 → write metrics to CSV
+- [ ] Integration test (`tests/test_m5_cow.cpp`): write to a merged page; assert reconstructed bytes equal original; assert `simulateWrite` latency < 50 µs (loose bound for CI)
+- [ ] **Commit milestone:** `feat: full C++ pipeline — generate → sample → cluster → compress → reconstruct`
 
 ---
 
@@ -240,17 +294,24 @@ amdec-sim/
 
 > **DSR Step:** Demonstration & Evaluation
 
-This phase must be **reproducible from a single command** (`python experiments/run_full_eval.py`). Reviewers and patent examiners may request reproduction.
+This phase must be **reproducible from a single pair of commands**:
+```bash
+cmake -B build -DCMAKE_BUILD_TYPE=Release && cmake --build build
+./build/experiments/run_full_eval --output results/raw/eval_$(date +%Y%m%d_%H%M%S).csv
+python analysis/plot_results.py results/raw/eval_<timestamp>.csv
+```
+Reviewers and patent examiners may request reproduction.
 
 ### 4.1 Experiment Suite
 
-| Experiment | Script | Outputs |
+| Experiment | Binary / Script | Outputs |
 |---|---|---|
-| Full pipeline evaluation | `run_full_eval.py` | All 5 primary metrics |
-| Parameter sweep | `parameter_sweep.py` | Heatmaps: savings vs. J×B, latency vs. K |
-| Ablation: M1 disabled | `ablation_m1.py` | CPU overhead spike (proves M1's value) |
-| Ablation: Fixed threshold | `ablation_adaptive.py` | Memory savings drop OR latency spike |
-| Acceleration benchmark | Module 4 | Python loop vs. NumPy vs. (optional) C |
+| Full pipeline evaluation | `./build/experiments/run_full_eval` | All 5 primary metrics → CSV |
+| Parameter sweep | `./build/experiments/parameter_sweep` | Per-parameter CSV rows; Python plots heatmaps |
+| Ablation: M1 disabled | `./build/experiments/ablation_m1` | CPU overhead spike (proves M1's value) → CSV |
+| Ablation: Fixed threshold | `./build/experiments/ablation_adaptive` | Memory savings drop OR latency spike → CSV |
+| Acceleration benchmark | `./build/src/m4_accel/bench` (Google Benchmark) | Scalar vs. AVX2 throughput in MB/s → JSON → Python bar chart |
+| Python analysis | `analysis/plot_results.py` | All paper figures from CSVs; no algorithm logic |
 
 ### 4.2 Results Documentation
 
@@ -390,8 +451,8 @@ Write sections in this order — **not** Introduction first:
 **Review 2 presentation structure:**
 1. Problem recap (1 slide) — the 4 gaps, your 3 contributions
 2. System architecture (1 slide) — the 5-module diagram
-3. Live demo: M1+M2 on synthetic data, show cluster output in terminal/notebook
-4. Preliminary results (1–2 slides): cluster size histogram, candidate reduction ratio
+3. Live demo: run C++ binary → pipe cluster output to terminal; show Python-generated cluster size histogram
+4. Preliminary results (1–2 slides): candidate reduction ratio, cluster size histogram from `analysis/plot_results.py`
 5. Phase C–F plan (1 slide): what's next and when
 
 ---
@@ -415,11 +476,13 @@ Write sections in this order — **not** Introduction first:
 
 | Risk | Likelihood | Impact | Mitigation |
 |---|---|---|---|
-| LSH produces too many false positives | Medium | High | Tune Jaccard threshold `J`; fall back to exact-hash verification for small clusters |
-| Memory savings < 30% target | Medium | High | Increase similarity ratio in synthetic workload; validate workload is realistic |
-| Delta sizes too large — most pages exceed `δ_max` | Low | Medium | Re-tune `δ_max`; use bsdiff instead of XOR+RLE |
-| Reconstruction latency too high (> 10 µs) | Low | High | Profile hot path; switch delta apply to C if Python is too slow |
-| Review 2 live demo fails | Medium | Medium | Prepare Jupyter notebook fallback with pre-run outputs |
+| LSH produces too many false positives | Medium | High | Tune Jaccard threshold `J`; add secondary exact-hash verification step for small clusters |
+| Memory savings < 30% target | Medium | High | Increase similarity ratio in synthetic workload; verify workload matches paper's 86% near-dup claim |
+| Delta sizes too large — most pages exceed `δ_max` | Low | Medium | Re-tune `δ_max`; switch from XOR+RLE to a proper patch format (e.g., bsdiff-style edit list) |
+| Reconstruction latency too high (> 10 µs) | Low | High | Profile with Instruments or `perf`; move delta decode to AVX2 SIMD path |
+| CMake/AVX2 compilation fails on target Mac | Low | Medium | Gate AVX2 with `cmake -DENABLE_AVX2=OFF` fallback; test on CI with scalar path |
+| C++ UB in hot path (raw pointer arithmetic) | Medium | Medium | Run under AddressSanitizer (`-fsanitize=address,undefined`) during development; add bounds checks in debug builds |
+| Review 2 live demo fails | Medium | Medium | Pre-run binary + pipe output to terminal; have CSV + Python plots ready as static fallback |
 | Paper plagiarism > 10% | Low | High | Write methodology and results sections entirely from scratch in your own words |
 | Venue rejection | Medium | Low | Pre-submit to arXiv; have 2 backup venues identified |
 
@@ -427,14 +490,31 @@ Write sections in this order — **not** Introduction first:
 
 ## Key Dependencies & Tooling
 
+### C++ (Core Engine)
+
+| Tool | Purpose | How to get |
+|---|---|---|
+| **CMake ≥ 3.20** | Build system | `brew install cmake` |
+| **clang++ / AppleClang** | C++ compiler (ships with Xcode CLT) | `xcode-select --install` |
+| **xxHash** | MinHash hot-path hashing (header-only) | `third_party/xxhash/` (git submodule or FetchContent) |
+| **MurmurHash3** | Alternative to xxHash (header-only) | Copy `MurmurHash3.h/.cpp` into `third_party/` |
+| **Catch2** | Unit + integration testing | CMake FetchContent |
+| **Google Benchmark** | Module 4 throughput measurement | CMake FetchContent |
+| **AVX2 intrinsics** | Vectorized XOR-diff in Module 4 | Built-in via `<immintrin.h>`; enable with `-mavx2` in CMake |
+
+### Python (Analysis Only — no algorithm logic)
+
+| Library | Purpose | Install |
+|---|---|---|
+| `pandas` | Load CSV results, build comparison tables | `pip install pandas` |
+| `numpy` | Post-hoc statistics (mean/stddev, ablation deltas) | `pip install numpy` |
+| `matplotlib` / `seaborn` | All paper figures | `pip install matplotlib seaborn` |
+| `scipy` | Curve fitting, significance tests | `pip install scipy` |
+
+### Documentation & Submission
+
 | Tool | Purpose | Install |
 |---|---|---|
-| `datasketch` | MinHash + LSH indexing | `pip install datasketch` |
-| `numpy` | Vectorized XOR diff (M4) | `pip install numpy` |
-| `matplotlib` / `seaborn` | Publication figures | `pip install matplotlib seaborn` |
-| `scipy` | Statistical analysis | `pip install scipy` |
-| `pytest` | Unit + integration testing | `pip install pytest` |
-| `clang` (Xcode CLT) | C delta module compilation | `xcode-select --install` |
 | draw.io / Excalidraw | Architecture diagrams | Web-based, free |
 | Overleaf / LaTeX | Paper typesetting | Overleaf (web) or `brew install --cask mactex` |
 | iThenticate | Plagiarism checking | Institutional license |
@@ -464,4 +544,4 @@ Phase 6                                            ████ ████  QA
 
 ---
 
-*Last updated: 2026-08-30 | Project: AMDEC | Methodology: Design Science Research (DSR)*
+*Last updated: 2026-08-30 | Project: AMDEC | Methodology: DSR | Engine: C++ (CMake/Catch2/xxHash/AVX2) | Analysis: Python (pandas/numpy/matplotlib)*

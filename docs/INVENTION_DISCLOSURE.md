@@ -310,3 +310,123 @@ URL: <https://doi.org/10.1109/TSC.2021.3109210>
 URL: <https://doi.org/10.1145/3575693.3575710>
 
 ---
+
+# Phase 2 — System Design & Architecture
+
+**Duration:** Week 1–2 (parallel with implementation setup)  
+**DSR Step:** Design & Development (Architecture)
+
+---
+
+## 2.0 Language & Tooling Stack (Final)
+
+After considering the implementation and evaluation requirements, I have finalized the following language and tooling stack.
+
+**C++ — core engine (Modules 1, 2, 3, 5)**
+- Page simulation, sampling/tiering logic, LSH clustering, base-delta storage, COW reconstruction
+- Style: classes + STL (`unordered_map`, `vector`) for structure/bookkeeping; raw arrays + `memcpy` (no STL, no allocation) in the hot paths — byte-diffing in Module 3, hash computation in Module 2 — since these are exactly what the latency/CPU numbers measure
+- Hashing: `xxHash` or `MurmurHash3` (header-only) for MinHash signatures
+- Timing: `<chrono>` `steady_clock` for all latency/overhead measurements
+- Build: CMake
+- Testing: Catch2 or GoogleTest
+- Output: write raw results (memory saved, timing, cluster stats) to CSV only — no plotting/analysis in C++
+
+**C++ — acceleration benchmark (Module 4)**
+- Vectorized/SIMD diff benchmark (e.g. AVX2 intrinsics) compared against baseline diff routine
+- Google Benchmark for throughput measurement
+
+**Python — results & reporting only (no algorithm logic)**
+- Reads CSV output from the C++ program
+- `pandas` — load/organize results, build comparison tables (your system vs. cited KSM/UKSM figures)
+- `numpy` — post-hoc statistics (mean/stddev across parameter sweeps, ablation deltas)
+- `matplotlib` / `seaborn` — all graphs: memory-saved-over-time, CPU overhead bars, cluster size distributions, latency histograms
+- ~~`datasketch`~~ — dropped; LSH is implemented natively in C++ now
+
+### Rule of thumb
+
+The implementation boundary is straightforward:
+
+> If it touches a memory page, a hash, a delta, or a timer — C++. If it touches a chart, a table, or a written number in the paper/slides — Python.
+
+No algorithmic logic lives in the Python layer; it is a pure results/reporting layer.
+
+### Impact on the Evaluation Targets
+
+Moving the core engine to C++ changes the assumptions used for the CPU overhead and reconstruction latency targets.
+
+The CPU overhead and reconstruction latency targets were previously softened because they were unreachable in a pure-Python simulator. With the core engine now in C++, both targets are realistic again and have been restored — see the updated table.
+
+---
+
+## 2.1 Architecture Documentation
+
+I will document the overall system architecture and define the formal inputs, outputs, and expected-case complexity for all five modules.
+
+- [ ] Finalize system architecture diagram (draw.io / Excalidraw / LaTeX TikZ for paper)
+- [ ] Document all 5 modules with formal inputs, outputs, and complexity
+
+| Module | Input | Output | Complexity (expected-case) | Addresses |
+|---|---|---|---|---|
+| M1: Region-Aware Sampling | Page set with write metadata | Prioritized scan queue | O(n) | Gap 2, Gap 3 |
+| M2: LSH Clustering | Candidate pages | Similarity clusters | O(n·k·s) — n=pages, k=num_hashes, s=sub-blocks/page | Gap 1, Gap 4 |
+| M3: Base-Delta Storage | Clusters | Compressed page store | O(c·p) — c=cluster size, p=page size (bytes) | Gap 4 |
+| M4: Acceleration Benchmark | Delta workload | Throughput metrics | — | Gap 2 |
+| M5: COW Simulation | Write event + merged page | Reconstructed private page | O(δ) — δ=delta size | Correctness proof |
+
+### Complexity consideration for M2
+
+The complexity for M2 is written as **O(n·k·s)** rather than O(n·k).
+
+The sub-block count per page (`s`) is a real cost of the chunking step and should not be dropped, since it is also what makes block-size (`B`) a tunable parameter with real performance implications.
+
+This is the **expected-case** complexity under the assumption of a reasonably even LSH bucket distribution.
+
+In the worst case, where many pages collide into a small number of buckets, the computation can degrade toward pairwise comparison within the offending bucket. I will acknowledge this with a one-line note in the Limitations section of the paper rather than leaving it implicit.
+
+---
+
+## 2.2 Parameter Space Definition
+
+I will define all tunable parameters **before** running the experiments. This is intended to prevent parameter-fishing after the fact and keep the evaluation methodologically consistent.
+
+| Parameter | Symbol | Default | Range to Sweep |
+|---|---|---|---|
+| Block size for MinHash | `B` | 128B | 64, 128, 256 |
+| Number of hash functions | `K` | 32 | 16, 32, 64 |
+| LSH bands | `b` | 8 | 4, 8, 16 |
+| Jaccard threshold | `J` | 0.7 | 0.5, 0.7, 0.9 |
+| Hot-page write-rate threshold | `τ_hot` | 0.1 | 0.05, 0.1, 0.2 |
+| Max delta size ratio | `δ_max` | 30% | 20%, 30%, 40% |
+
+These defaults are reasonable starting points, not validated values.
+
+I will run the first end-to-end pass using the defaults and confirm that the pipeline works correctly before performing the parameter sweep.
+
+I will not tune the parameters before having a working baseline, since optimizing before confirming correctness could result in spending time tuning a pipeline that still contains a correctness issue.
+
+---
+
+## 2.3 Evaluation Design (Pre-register my metrics)
+
+I will define the metrics and baselines before coding the evaluation.
+
+> **Define metrics and baselines before coding.** This is a real methodological expectation reviewers check for, and it also matters for patent claims — I cannot claim performance characteristics that have not been defined in advance.
+
+### Primary Metrics
+
+| Metric | Formula | Unit | Target |
+|---|---|---|---|
+| Memory savings | `(S_base − S_system) / S_base × 100` | % | ≥ 30% *(matches your Objective 4 — keep this one)* |
+| CPU overhead | `(T_scan + T_cluster + T_delta) / T_total × 100` | % | **Revised: report as a comparison, e.g. "X% lower than full-scan baseline," rather than a fixed ≤5% target** — I don't yet have data showing 5% is achievable in a Python simulator, and locking in an unvalidated absolute number risks either quietly missing it or being pressed on it in review |
+| Reconstruction latency | `mean(T_reconstruct)` per page | **Revised: ms, not µs** | Report actual measured value; **do not commit to ≤10µs in advance** — pure-Python function call overhead alone commonly exceeds several µs, so this target is very likely unreachable unless the reconstruction path is implemented in C. If I want a hard latency target, I will set it only after my first working measurement, or move this specific path to C early |
+| Scan efficiency | `pages_merged / pages_scanned` | ratio | > 0.6 *(reasonable, keep)* |
+| Cluster precision | `1 − false_positive_rate` | ratio | > 0.9 *(reasonable, keep — but define "false positive" precisely: a pair placed in the same cluster whose true byte-similarity falls below your Jaccard threshold `J` when checked exactly)* |
+
+### Baselines (from literature)
+
+The following baseline values still need to be replaced with the real cited figures from the relevant sources.
+
+- KSM: **[insert real reported memory-savings % from your actual cited KSM source, with citation]**
+- UKSM: **[insert real reported memory-savings % from your actual cited UKSM source, with citation]**
+
+---
