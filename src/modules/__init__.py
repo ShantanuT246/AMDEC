@@ -6,6 +6,7 @@ from .m3_delta_storage import (
     CompressedCluster,
     BaseDeltaStorageManager,
 )
+from .m4_acceleration import AccelerationBenchmark, BenchmarkResult
 from .m5_cow import PageState, PageTableEntry, SimulatedCOWHandler
 
 __all__ = [
@@ -19,6 +20,8 @@ __all__ = [
     "DeltaRecord",
     "CompressedCluster",
     "BaseDeltaStorageManager",
+    "AccelerationBenchmark",
+    "BenchmarkResult",
     "PageState",
     "PageTableEntry",
     "SimulatedCOWHandler",
