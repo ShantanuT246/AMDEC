@@ -238,7 +238,7 @@ amdec-sim/
 - [ ] Implement `page_generator.cpp`:
   - Generate N = 10,000–100,000 pages with Zipf-distributed write activity
   - Configurable similarity ratio (80% near-duplicate, 7% exact, 13% unique) — mutate a base template at random byte offsets
-- [ ] Implement `m1_sampling/sampler.cpp` — compute `write_rate = write_count / age`; classify into `HOT / WARM / COLD`; push cold/warm into `std::priority_queue`
+- [ ] Implement `m1_sampling/sampler.cpp` — compute `write_rate = write_count / max(age, 1ULL);`; classify into `HOT / WARM / COLD`; push cold/warm into `std::priority_queue`
 - [ ] Write `tests/test_m1_sampling.cpp` (Catch2) — `REQUIRE` that hot pages are never enqueued; cold pages rank above warm
 - [ ] **Commit milestone:** `feat: CMake build + M1 tiering — hot/warm/cold classification passing Catch2 tests`
 
