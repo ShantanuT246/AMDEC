@@ -6,6 +6,7 @@ from .m3_delta_storage import (
     CompressedCluster,
     BaseDeltaStorageManager,
 )
+from .m5_cow import PageState, PageTableEntry, SimulatedCOWHandler
 
 __all__ = [
     "StabilityTier",
@@ -18,4 +19,7 @@ __all__ = [
     "DeltaRecord",
     "CompressedCluster",
     "BaseDeltaStorageManager",
+    "PageState",
+    "PageTableEntry",
+    "SimulatedCOWHandler",
 ]

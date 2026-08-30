@@ -2,7 +2,12 @@
 Unit tests for Module 1: Region-Aware Sampling & Feedback Engine (src/modules/m1_sampling.py).
 """
 
+import os
+import sys
 import pytest
+
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+
 from src.modules.m1_sampling import RegionSamplingEngine, StabilityTier
 from src.workload.page_generator import Page, SyntheticWorkloadGenerator, PAGE_SIZE
 

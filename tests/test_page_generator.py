@@ -3,7 +3,11 @@ Unit tests for Synthetic Anonymous Workload Generator (src/workload/page_generat
 """
 
 import os
+import sys
 import pytest
+
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+
 from src.workload.page_generator import Page, SyntheticWorkloadGenerator, PAGE_SIZE
 
 
