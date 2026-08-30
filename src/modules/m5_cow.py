@@ -51,6 +51,7 @@ class SimulatedCOWHandler:
         self.delta_manager = delta_manager or BaseDeltaStorageManager()
         self.sampling_engine = sampling_engine
         self.page_table: Dict[int, PageTableEntry] = {}
+        self.cluster_bases: Dict[int, bytearray] = {}  # Immutable storage for cluster base pages
         self.reconstruction_latencies_us: List[float] = []
 
     def populate_from_compressed_clusters(
@@ -60,12 +61,16 @@ class SimulatedCOWHandler:
     ):
         """Populates the simulated page table from Module 3 compressed cluster outputs."""
         self.page_table.clear()
+        self.cluster_bases.clear()
         self.reconstruction_latencies_us.clear()
 
         page_map = {p.page_id: p for p in all_pages}
         accounted_page_ids = set()
 
         for cc in compressed_clusters:
+            # Register immutable cluster base content
+            self.cluster_bases[cc.cluster_id] = bytearray(cc.base_page_content)
+
             # 1. Register Base Page
             self.page_table[cc.base_page_id] = PageTableEntry(
                 page_id=cc.base_page_id,
@@ -121,9 +126,9 @@ class SimulatedCOWHandler:
             return entry.content
 
         elif entry.state == PageState.DELTA_PAGE:
-            base_entry = self.page_table[entry.base_page_id]
+            base_content = self.cluster_bases[entry.cluster_id]
             t0 = time.perf_counter()
-            reconstructed = self.delta_manager.reconstruct_page(base_entry.content, entry.delta)
+            reconstructed = self.delta_manager.reconstruct_page(base_content, entry.delta)
             lat_us = (time.perf_counter() - t0) * 1_000_000.0
             self.reconstruction_latencies_us.append(lat_us)
             return reconstructed
@@ -159,11 +164,11 @@ class SimulatedCOWHandler:
         # Case 2: Page is DELTA_PAGE -> Copy-on-Write Write Fault
         elif entry.state == PageState.DELTA_PAGE:
             entry.cow_fault_count += 1
-            base_entry = self.page_table[entry.base_page_id]
+            base_content = self.cluster_bases[entry.cluster_id]
 
-            # Reconstruct page from base + delta
+            # Reconstruct page from immutable base + delta
             t0 = time.perf_counter()
-            reconstructed = self.delta_manager.reconstruct_page(base_entry.content, entry.delta)
+            reconstructed = self.delta_manager.reconstruct_page(base_content, entry.delta)
             lat_us = (time.perf_counter() - t0) * 1_000_000.0
             self.reconstruction_latencies_us.append(lat_us)
 
@@ -185,7 +190,7 @@ class SimulatedCOWHandler:
         # Case 3: Page is BASE_PAGE written to
         elif entry.state == PageState.BASE_PAGE:
             entry.cow_fault_count += 1
-            # Allocate private copy for this writer
+            # Allocate private writable copy for this writer (leaving cluster_bases intact)
             private_content = bytearray(entry.content)
             private_content[offset : offset + len(data)] = data
 

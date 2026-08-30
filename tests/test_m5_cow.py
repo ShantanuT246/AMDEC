@@ -112,5 +112,33 @@ def test_write_fault_cow_break_and_feedback():
     assert m1_engine.page_cow_breaks[1] == 1
 
 
+def test_write_to_base_page_does_not_corrupt_deltas():
+    """Verify writing to the base page breaks COW for the base without corrupting dependent delta reconstructions."""
+    generator = SyntheticWorkloadGenerator(seed=42)
+    m3_manager = BaseDeltaStorageManager()
+    cow_handler = SimulatedCOWHandler(delta_manager=m3_manager)
+
+    base_content = generator._create_template_page_content("heap_struct")
+    target_content = generator._mutate_page_content(base_content, 0.005)
+
+    pages = [
+        Page(page_id=0, region_id=0, content=bytearray(base_content), alloc_time=10.0, last_write_time=10.0),
+        Page(page_id=1, region_id=0, content=bytearray(target_content), alloc_time=10.0, last_write_time=10.0),
+    ]
+
+    cluster = SimilarityCluster(cluster_id=0, page_ids=[0, 1])
+    compressed_clusters, _ = m3_manager.compress_workload([cluster], pages)
+    cow_handler.populate_from_compressed_clusters(compressed_clusters, pages)
+
+    # 1. Modify Base Page (Page 0)
+    cow_handler.handle_write_fault(page_id=0, offset=0, data=b"CORRUPT_BASE_HEADER", current_time=100.0)
+    assert cow_handler.page_table[0].state == PageState.FULL_PAGE
+    assert cow_handler.read_page(0)[:19] == b"CORRUPT_BASE_HEADER"
+
+    # 2. Verify Delta Page (Page 1) still reconstructs to its original target content correctly
+    read_delta = cow_handler.read_page(1)
+    assert read_delta == target_content, "Delta reconstruction must not be corrupted by base page writes!"
+
+
 if __name__ == "__main__":
     pytest.main(["-v", __file__])

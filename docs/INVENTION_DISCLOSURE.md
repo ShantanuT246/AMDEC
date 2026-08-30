@@ -318,43 +318,34 @@ URL: <https://doi.org/10.1145/3575693.3575710>
 
 ---
 
-## 2.0 Language & Tooling Stack (Final)
+## 2.0 Language & Tooling Stack (Official Python Userspace Simulation)
 
-After considering the implementation and evaluation requirements, I have finalized the following language and tooling stack.
+The simulation engine, workload generator, clustering pipeline, base-delta storage, and evaluation harnesses are built in Python with high-performance numerical and hashing libraries.
 
-**C++ — core engine (Modules 1, 2, 3, 5)**
-- Page simulation, sampling/tiering logic, LSH clustering, base-delta storage, COW reconstruction
-- Style: classes + STL (`unordered_map`, `vector`) for structure/bookkeeping; raw arrays + `memcpy` (no STL, no allocation) in the hot paths — byte-diffing in Module 3, hash computation in Module 2 — since these are exactly what the latency/CPU numbers measure
-- Hashing: `xxHash` or `MurmurHash3` (header-only) for MinHash signatures
-- Timing: `<chrono>` `steady_clock` for all latency/overhead measurements
-- Build: CMake
-- Testing: Catch2 or GoogleTest
-- Output: write raw results (memory saved, timing, cluster stats) to CSV only — no plotting/analysis in C++
+**Python 3.x — Core Simulation Pipeline (Modules 1, 2, 3, 5)**
+- Pure userspace algorithmic simulation running on macOS / Linux (no kernel module, no hypervisor/VM, no root privileges).
+- `numpy` — vectorized bitwise operations, fast XOR differencing, and statistical arrays.
+- `datasketch` — MinHash signature generation and LSH bucket indexing.
+- `pytest` — automated unit and regression test suite (25/25 tests passing).
+- `csv` — timestamped raw experiment logging to `results/raw/`.
 
-**C++ — acceleration benchmark (Module 4)**
-- Vectorized/SIMD diff benchmark (e.g. AVX2 intrinsics) compared against baseline diff routine
-- Google Benchmark for throughput measurement
+**Python — Acceleration Benchmark (Module 4)**
+- Compares pure Python scalar byte loops against NumPy SIMD-vectorized uint64 XOR differencing.
+- Measures throughput in MB/s, latency in µs/page, and speedup factor.
+- Optional: native C extension via `ctypes`/`clang` strictly as an exploratory extension.
 
-**Python — results & reporting only (no algorithm logic)**
-- Reads CSV output from the C++ program
-- `pandas` — load/organize results, build comparison tables (your system vs. cited KSM/UKSM figures)
-- `numpy` — post-hoc statistics (mean/stddev across parameter sweeps, ablation deltas)
-- `matplotlib` / `seaborn` — all graphs: memory-saved-over-time, CPU overhead bars, cluster size distributions, latency histograms
-- ~~`datasketch`~~ — dropped; LSH is implemented natively in C++ now
+**Python — Analysis & Publication Visualizations (Phase 6)**
+- `matplotlib` / `seaborn` — generates 300-DPI publication figures to `results/figures/`.
+- `scipy` / `pandas` — statistical distributions, ECDF calculations, and confidence intervals.
+- `compare_baselines.py` — outputs comparison tables and LaTeX table snippets for papers.
 
-### Rule of thumb
+### Methodological Clarity on Memory vs. Runtime
 
-The implementation boundary is straightforward:
-
-> If it touches a memory page, a hash, a delta, or a timer — C++. If it touches a chart, a table, or a written number in the paper/slides — Python.
-
-No algorithmic logic lives in the Python layer; it is a pure results/reporting layer.
-
-### Impact on the Evaluation Targets
-
-Moving the core engine to C++ changes the assumptions used for the CPU overhead and reconstruction latency targets.
-
-The CPU overhead and reconstruction latency targets were previously softened because they were unreachable in a pure-Python simulator. With the core engine now in C++, both targets are realistic again and have been restored — see the updated table.
+To maintain scientific rigor:
+1. **Logical Memory Savings:** Measured purely via algorithmic storage models (base pages + unique pages + delta payloads + metadata).
+2. **Python Process RSS:** Represents interpreter runtime memory, not algorithm savings.
+3. **Execution Runtime:** Reported transparently as *Python userspace simulator execution performance*.
+4. **Baseline Comparisons:** KSM, UKSM, and Difference Engine figures are cited strictly from peer-reviewed literature.
 
 ---
 
