@@ -1,0 +1,25 @@
+\begin{table}[t]
+\centering
+\caption{AMDEC Multi-Trial System Evaluation ($N=10,000$ pages, 10 independent trials, 95\% CI)}
+\label{tab:amdec_evaluation}
+\small
+\begin{tabular}{lcccc}
+\hline
+\textbf{Metric} & \textbf{Mean $\pm$ Std} & \textbf{95\% CI} & \textbf{Median} & \textbf{[Min, Max]} \\
+\hline
+Logical Memory Savings (%) & 73.60 $\pm$ 0.83 & [73.00, 74.19] & 73.64 & [72.21, 74.67] \\
+Effective Compression Ratio & 3.79 $\pm$ 0.12 & [3.71, 3.88] & 3.79 & [3.60, 3.95] \\
+AMDEC Compressed Footprint (MB) & 10.31 $\pm$ 0.32 & [10.08, 10.55] & 10.30 & [9.90, 10.85] \\
+Similarity Clusters Formed & 147.40 $\pm$ 9.24 & [140.79, 154.01] & 148.50 & [127.00, 161.00] \\
+Mean Delta Size (w/ metadata, B) & 24.66 $\pm$ 2.18 & [23.10, 26.22] & 24.21 & [22.33, 29.12] \\
+M1 Volatile Scan Reduction (%) & 8.20 $\pm$ 0.36 & [7.94, 8.46] & 8.07 & [7.82, 8.75] \\
+M2 LSH Candidate Reduction (%) & 99.84 $\pm$ 0.01 & [99.84, 99.85] & 99.85 & [99.83, 99.85] \\
+Mean Reconstruction Latency (µs) & 1.75 $\pm$ 0.42 & [1.45, 2.05] & 1.59 & [1.39, 2.78] \\
+P95 Reconstruction Latency (µs) & 3.68 $\pm$ 0.41 & [3.39, 3.97] & 3.60 & [3.29, 4.67] \\
+P99 Reconstruction Latency (µs) & 4.25 $\pm$ 0.39 & [3.96, 4.53] & 4.10 & [3.83, 5.12] \\
+M4 SIMD Differencing Speedup (x) & 198.05 $\pm$ 7.67 & [192.56, 203.53] & 199.30 & [179.98, 206.61] \\
+Total Pipeline Runtime (ms) & 4284.62 $\pm$ 80.01 & [4227.38, 4341.86] & 4271.61 & [4189.14, 4436.32] \\
+Pipeline Throughput (pages/s) & 2334.65 $\pm$ 43.03 & [2303.87, 2365.44] & 2341.04 & [2254.12, 2387.12] \\
+\hline
+\end{tabular}
+\end{table}

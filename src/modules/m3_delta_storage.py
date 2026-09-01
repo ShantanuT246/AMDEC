@@ -79,12 +79,15 @@ class BaseDeltaStorageManager:
 
     def __init__(
         self,
-        max_delta_ratio: float = 0.30,
-        base_selection_strategy: str = "medoid",
+        max_delta_ratio: float = 0.30,      # Default 30% of PAGE_SIZE (1228B threshold)
+        base_selection_strategy: str = "medoid",  # "medoid", "stablest", "first"
+        seed: int = 42,
     ):
         self.max_delta_ratio = max_delta_ratio
         self.max_delta_bytes = int(PAGE_SIZE * max_delta_ratio)
         self.base_selection_strategy = base_selection_strategy
+        self.seed = seed
+        self.rng = np.random.default_rng(seed)
 
     def compute_xor_diff(self, page_content: bytearray, base_content: bytearray) -> bytearray:
         """Computes raw byte-level XOR diff between target and base."""
@@ -144,7 +147,7 @@ class BaseDeltaStorageManager:
                 return best_page
             else:
                 # Sample 8 candidates for large clusters to maintain fast linear time
-                sample_candidates = np.random.choice(pages, size=min(8, len(pages)), replace=False)
+                sample_candidates = self.rng.choice(pages, size=min(8, len(pages)), replace=False)
                 min_dist = float("inf")
                 best_page = sample_candidates[0]
                 for p_cand in sample_candidates:

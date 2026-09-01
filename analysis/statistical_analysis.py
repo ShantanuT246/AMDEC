@@ -1,116 +1,146 @@
 """
-AMDEC — Multi-Trial Statistical Confidence Analysis.
+AMDEC — Multi-Trial Statistical Analysis & LaTeX Exporter.
 
-Runs multiple independent randomized trials (across different seeds) to compute:
-- Mean Logical Memory Savings (%) and 95% Confidence Intervals (CI)
-- Mean LSH Candidate Pruning Reduction (%)
-- Mean Reconstruction Latency (µs) and P95/P99 latency bounds
-- Mean Throughput (pages/sec)
+Reads raw trial CSV outputs from results/raw/, calculates multi-trial statistical metrics
+(Mean, Sample Std, 95% Student's t Confidence Intervals, Median, Min, Max), exports
+structured processed CSV summaries to results/processed/, and generates publication-grade LaTeX tables.
 """
 
-import sys
+import csv
 import os
-import time
-from typing import Dict, List
+import sys
+from typing import Any, Dict, List
 import numpy as np
 import scipy.stats as stats
 
 # Ensure project root is in sys.path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from src.workload.page_generator import SyntheticWorkloadGenerator
-from src.modules.m1_sampling import RegionSamplingEngine
-from src.modules.m2_lsh_clustering import MinHashLSHClusteringEngine
-from src.modules.m3_delta_storage import BaseDeltaStorageManager
-from src.modules.m5_cow import SimulatedCOWHandler
 
+def compute_column_stats(values: List[float], confidence: float = 0.95) -> Dict[str, Any]:
+    """Calculates comprehensive statistical aggregations for a continuous sample."""
+    arr = np.array(values, dtype=np.float64)
+    n = len(arr)
+    m = float(np.mean(arr))
+    s = float(np.std(arr, ddof=1)) if n > 1 else 0.0
+    se = float(stats.sem(arr)) if n > 1 else 0.0
+    t_crit = float(stats.t.ppf((1.0 + confidence) / 2.0, n - 1)) if n > 1 else 0.0
+    ci_hw = float(t_crit * se) if n > 1 else 0.0
 
-def compute_ci(data: List[float], confidence: float = 0.95) -> Dict[str, float]:
-    """Computes mean, standard error, and confidence interval bounds."""
-    a = 1.0 * np.array(data)
-    n = len(a)
-    m, se = np.mean(a), stats.sem(a)
-    h = se * stats.t.ppf((1 + confidence) / 2., n - 1) if n > 1 else 0.0
     return {
-        "mean": float(m),
-        "std": float(np.std(a, ddof=1)) if n > 1 else 0.0,
-        "sem": float(se),
-        "ci_lower": float(m - h),
-        "ci_upper": float(m + h),
-        "ci_half_width": float(h),
+        "n": n,
+        "mean": m,
+        "std": s,
+        "sem": se,
+        "median": float(np.median(arr)),
+        "min": float(np.min(arr)),
+        "max": float(np.max(arr)),
+        "ci_lower": m - ci_hw,
+        "ci_upper": m + ci_hw,
+        "ci_half_width": ci_hw,
     }
 
 
-def run_statistical_analysis(num_trials: int = 10, num_pages: int = 5000):
-    print("=" * 80)
-    print(f"  AMDEC STATISTICAL CONFIDENCE ANALYSIS ({num_trials} TRIALS, N = {num_pages:,} PAGES)")
-    print("=" * 80)
+def process_primary_trials():
+    raw_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "results", "raw"))
+    proc_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "results", "processed"))
+    os.makedirs(proc_dir, exist_ok=True)
 
-    savings_list = []
-    compression_ratios = []
-    lsh_reductions = []
-    latencies_mean = []
-    latencies_p95 = []
-    latencies_p99 = []
-    throughputs_pps = []
+    trials_file = os.path.join(raw_dir, "primary_trials.csv")
+    if not os.path.exists(trials_file):
+        print(f"Warning: {trials_file} does not exist. Please run 'python experiments/run_full_eval.py' first.")
+        return
 
-    m1 = RegionSamplingEngine()
-    m2 = MinHashLSHClusteringEngine(block_size=128, num_hashes=32, num_bands=8, similarity_threshold=0.70)
-    m3 = BaseDeltaStorageManager(max_delta_ratio=0.30)
-    cow = SimulatedCOWHandler(delta_manager=m3, sampling_engine=m1)
+    with open(trials_file, "r") as f:
+        reader = csv.DictReader(f)
+        rows = list(reader)
 
-    for trial in range(num_trials):
-        seed = 42 + trial * 7
-        t0 = time.perf_counter()
+    if not rows:
+        return
 
-        gen = SyntheticWorkloadGenerator(seed=seed)
-        pages = gen.generate_workload(num_pages=num_pages)
-        sim_time = gen.simulate_write_traffic(pages, num_ticks=30, writes_per_tick=150, current_time=100.0)
+    n_trials = len(rows)
+    metrics_to_agg = [
+        ("memory_savings_percent", "Logical Memory Savings (%)"),
+        ("compression_ratio", "Effective Compression Ratio"),
+        ("amdec_memory_mb", "AMDEC Compressed Footprint (MB)"),
+        ("num_clusters", "Similarity Clusters Formed"),
+        ("mean_delta_bytes", "Mean Delta Size (w/ metadata, B)"),
+        ("m1_reduction_pct", "M1 Volatile Scan Reduction (%)"),
+        ("pair_reduction_percent", "M2 LSH Candidate Reduction (%)"),
+        ("mean_reconstruction_us", "Mean Reconstruction Latency (µs)"),
+        ("p95_reconstruction_us", "P95 Reconstruction Latency (µs)"),
+        ("p99_reconstruction_us", "P99 Reconstruction Latency (µs)"),
+        ("simd_speedup", "M4 SIMD Differencing Speedup (x)"),
+        ("pipeline_time_ms", "Total Pipeline Runtime (ms)"),
+        ("pipeline_throughput_pages_s", "Pipeline Throughput (pages/s)"),
+    ]
 
-        cands, _ = m1.filter_and_prioritize(pages, current_time=sim_time)
-        clusters, lsh_stats = m2.cluster_pages([c.page for c in cands])
-        compressed_clusters, m3_stats = m3.compress_workload(clusters, pages)
+    summary_rows = []
+    print("=" * 95)
+    print(f"  AMDEC STATISTICAL SUMMARY ({n_trials} Independent Trials)")
+    print("=" * 95)
+    print(f"  {'Metric':<36} | {'Mean ± Std':<18} | {'95% Confidence Interval':<24} | {'Median [Min, Max]'}")
+    print("-" * 95)
 
-        cow.populate_from_compressed_clusters(compressed_clusters, pages)
-        for p in pages[:500]:
-            if p.page_id in cow.page_table:
-                _ = cow.read_page(p.page_id)
+    for col_key, label in metrics_to_agg:
+        vals = [float(r[col_key]) for r in rows if col_key in r and r[col_key]]
+        if vals:
+            st = compute_column_stats(vals)
+            summary_rows.append({
+                "metric_key": col_key,
+                "metric_label": label,
+                "n_trials": st["n"],
+                "mean": st["mean"],
+                "std": st["std"],
+                "ci_lower": st["ci_lower"],
+                "ci_upper": st["ci_upper"],
+                "ci_half_width": st["ci_half_width"],
+                "median": st["median"],
+                "min": st["min"],
+                "max": st["max"],
+            })
+            print(f"  {label:<36} | {st['mean']:6.2f} ± {st['std']:5.2f}    | [{st['ci_lower']:6.2f}, {st['ci_upper']:6.2f}]           | {st['median']:6.2f} [{st['min']:6.2f}, {st['max']:6.2f}]")
 
-        lat_stats = cow.get_latency_metrics()
-        total_time_s = time.perf_counter() - t0
+    # Export Processed Summary CSV
+    summary_csv = os.path.join(proc_dir, "primary_summary.csv")
+    with open(summary_csv, "w", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=list(summary_rows[0].keys()))
+        writer.writeheader()
+        writer.writerows(summary_rows)
 
-        savings_list.append(m3_stats["logical_memory_savings_pct"])
-        compression_ratios.append(m3_stats["compression_ratio"])
-        lsh_reductions.append(lsh_stats["candidate_reduction_pct"])
-        latencies_mean.append(lat_stats["mean_us"])
-        latencies_p95.append(lat_stats["p95_us"])
-        latencies_p99.append(lat_stats["p99_us"])
-        throughputs_pps.append(num_pages / total_time_s)
+    # Export LaTeX Table Snippet
+    latex_path = os.path.join(proc_dir, "primary_statistical_table.tex")
+    latex_lines = [
+        r"\begin{table}[t]",
+        r"\centering",
+        r"\caption{AMDEC Multi-Trial System Evaluation ($N=10,000$ pages, 10 independent trials, 95\% CI)}",
+        r"\label{tab:amdec_evaluation}",
+        r"\small",
+        r"\begin{tabular}{lcccc}",
+        r"\hline",
+        r"\textbf{Metric} & \textbf{Mean $\pm$ Std} & \textbf{95\% CI} & \textbf{Median} & \textbf{[Min, Max]} \\",
+        r"\hline",
+    ]
 
-        print(f"  Trial {trial+1:2d}/{num_trials} [Seed={seed:3d}] | Savings: {m3_stats['logical_memory_savings_pct']:5.2f}% | Latency (Mean/P95): {lat_stats['mean_us']:.2f}/{lat_stats['p95_us']:.2f} µs")
+    for sr in summary_rows:
+        latex_lines.append(
+            f"{sr['metric_label']} & {sr['mean']:.2f} $\\pm$ {sr['std']:.2f} & [{sr['ci_lower']:.2f}, {sr['ci_upper']:.2f}] & {sr['median']:.2f} & [{sr['min']:.2f}, {sr['max']:.2f}] \\\\"
+        )
 
-    ci_savings = compute_ci(savings_list)
-    ci_comp = compute_ci(compression_ratios)
-    ci_lsh = compute_ci(lsh_reductions)
-    ci_lat_mean = compute_ci(latencies_mean)
-    ci_lat_p95 = compute_ci(latencies_p95)
-    ci_lat_p99 = compute_ci(latencies_p99)
-    ci_tp = compute_ci(throughputs_pps)
+    latex_lines.extend([
+        r"\hline",
+        r"\end{tabular}",
+        r"\end{table}",
+    ])
 
-    print("\n" + "=" * 80)
-    print("  AMDEC 95% STATISTICAL CONFIDENCE INTERVAL SUMMARY")
-    print("=" * 80)
-    print(f"  Metric                             | Mean ± Std.Dev        | 95% Confidence Interval")
-    print("-" * 80)
-    print(f"  Logical Memory Savings (%)         | {ci_savings['mean']:5.2f}% ± {ci_savings['std']:4.2f}%    | [{ci_savings['ci_lower']:5.2f}%, {ci_savings['ci_upper']:5.2f}%]")
-    print(f"  Effective Compression Ratio        | {ci_comp['mean']:5.2f}x ± {ci_comp['std']:4.2f}x     | [{ci_comp['ci_lower']:5.2f}x, {ci_comp['ci_upper']:5.2f}x]")
-    print(f"  LSH Pair Pruning Reduction (%)     | {ci_lsh['mean']:5.3f}% ± {ci_lsh['std']:4.3f}%   | [{ci_lsh['ci_lower']:5.3f}%, {ci_lsh['ci_upper']:5.3f}%]")
-    print(f"  Reconstruction Latency (Mean, µs)  | {ci_lat_mean['mean']:5.2f} µs ± {ci_lat_mean['std']:4.2f} µs   | [{ci_lat_mean['ci_lower']:5.2f} µs, {ci_lat_mean['ci_upper']:5.2f} µs]")
-    print(f"  Reconstruction Latency (P95, µs)   | {ci_lat_p95['mean']:5.2f} µs ± {ci_lat_p95['std']:4.2f} µs   | [{ci_lat_p95['ci_lower']:5.2f} µs, {ci_lat_p95['ci_upper']:5.2f} µs]")
-    print(f"  Reconstruction Latency (P99, µs)   | {ci_lat_p99['mean']:5.2f} µs ± {ci_lat_p99['std']:4.2f} µs   | [{ci_lat_p99['ci_lower']:5.2f} µs, {ci_lat_p99['ci_upper']:5.2f} µs]")
-    print(f"  Pipeline Throughput (pages/sec)    | {ci_tp['mean']:5.0f} ± {ci_tp['std']:4.0f} pps      | [{ci_tp['ci_lower']:5.0f}, {ci_tp['ci_upper']:5.0f}] pps")
-    print("=" * 80)
+    with open(latex_path, "w") as f:
+        f.write("\n".join(latex_lines))
+
+    print("-" * 95)
+    print(f"  [Summary Exported] : {summary_csv}")
+    print(f"  [LaTeX Exported]   : {latex_path}")
+    print("=" * 95)
 
 
 if __name__ == "__main__":
-    run_statistical_analysis()
+    process_primary_trials()

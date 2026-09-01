@@ -127,9 +127,9 @@ class SimulatedCOWHandler:
 
         elif entry.state == PageState.DELTA_PAGE:
             base_content = self.cluster_bases[entry.cluster_id]
-            t0 = time.perf_counter()
+            t0 = time.perf_counter_ns()
             reconstructed = self.delta_manager.reconstruct_page(base_content, entry.delta)
-            lat_us = (time.perf_counter() - t0) * 1_000_000.0
+            lat_us = (time.perf_counter_ns() - t0) / 1000.0
             self.reconstruction_latencies_us.append(lat_us)
             return reconstructed
 
@@ -167,9 +167,9 @@ class SimulatedCOWHandler:
             base_content = self.cluster_bases[entry.cluster_id]
 
             # Reconstruct page from immutable base + delta
-            t0 = time.perf_counter()
+            t0 = time.perf_counter_ns()
             reconstructed = self.delta_manager.reconstruct_page(base_content, entry.delta)
-            lat_us = (time.perf_counter() - t0) * 1_000_000.0
+            lat_us = (time.perf_counter_ns() - t0) / 1000.0
             self.reconstruction_latencies_us.append(lat_us)
 
             # Allocate private page copy, apply write, and update state to FULL_PAGE
@@ -204,6 +204,10 @@ class SimulatedCOWHandler:
 
         else:
             raise RuntimeError(f"Unknown page state {entry.state}")
+
+    def get_raw_latency_samples(self) -> List[float]:
+        """Returns the complete list of individual measured reconstruction latency samples in microseconds."""
+        return list(self.reconstruction_latencies_us)
 
     def get_latency_metrics(self) -> Dict[str, float]:
         """Calculates statistical percentiles for page reconstruction latencies."""

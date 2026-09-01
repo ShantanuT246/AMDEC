@@ -114,6 +114,7 @@ class MinHashLSHClusteringEngine:
         self.rows_per_band = num_hashes // num_bands
         self.similarity_threshold = similarity_threshold
         self.seed = seed
+        self.rng = np.random.default_rng(seed)
 
     def chunk_page(self, content: bytearray) -> List[bytes]:
         """
@@ -242,7 +243,7 @@ class MinHashLSHClusteringEngine:
                             # Sample additional cross pairs across representatives
                             sample_k = min(n_reps * 2, 500)
                             for _ in range(sample_k):
-                                i, j = np.random.choice(n_reps, size=2, replace=False)
+                                i, j = self.rng.choice(n_reps, size=2, replace=False)
                                 p1, p2 = group_representatives[i], group_representatives[j]
                                 candidate_pairs.add((min(p1, p2), max(p1, p2)))
 
@@ -296,7 +297,7 @@ class MinHashLSHClusteringEngine:
                 else:
                     # Sample up to 40 pairs for large clusters to bound runtime
                     for _ in range(40):
-                        i, j = np.random.choice(m_len, size=2, replace=False)
+                        i, j = self.rng.choice(m_len, size=2, replace=False)
                         p_a = min(member_ids[i], member_ids[j])
                         p_b = max(member_ids[i], member_ids[j])
                         sim = pair_similarities.get(
