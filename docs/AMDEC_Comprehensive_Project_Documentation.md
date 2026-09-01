@@ -252,6 +252,22 @@ Demonstrates AMDEC's operational boundary: as pages diverge from identical templ
 
 ---
 
+### 5.3 Complete Publication Figure Catalog (`results/figures/`, 300 DPI)
+
+| Figure | Filename | Visual Representation | Key Academic Finding |
+|---|---|---|---|
+| **Fig 1** | `fig1_mutation_sensitivity.png` | Dual-axis curve: Mutation % ($0.1\% \to 30\%$) vs Savings (%) & Delta bytes | Graceful degradation of savings from $78.4\%$ to $34.8\%$ under heavy drift. |
+| **Fig 2** | `fig2_similarity_composition.png` | Bar chart with compression factors: Near-dup ratio ($20\% \to 80\%$) | Demonstrates linear scalability of savings with heap near-duplicate density. |
+| **Fig 3** | `fig3_reconstruction_latency_cdf.png` | High-res Empirical CDF with Median, P95, and P99 threshold lines | Bounded retrieval latency ($P95 = 6.54\ \mu\text{s}$, $P99 = 7.50\ \mu\text{s} < 10\ \mu\text{s}$). |
+| **Fig 4** | `fig4_ablation_comparison.png` | Dual subplot: M1 runtime savings & LSH $O(N)$ vs $O(N^2)$ comparison drop | Proves sampling cuts scan time and LSH skips $98.3\% - 99.8\%$ of candidate pairs. |
+| **Fig 5** | `fig5_acceleration_throughput.png` | Throughput comparison: Scalar ($17\text{ MB/s}$) vs SIMD uint64 ($>3,100\text{ MB/s}$) | Demonstrates algorithmic suitability for SIMD vector differencing ($>170\times$ speedup). |
+| **Fig 6** | `fig6_scalability_throughput.png` | Dual-axis scalability: $1\text{K} \to 20\text{K}$ pages vs Runtime (ms) & Pages/sec | Demonstrates linear $O(N)$ execution scaling across expanding memory datasets. |
+| **Fig 7** | `fig7_delta_size_distribution.png` | Boxplot vs 4096B page + Delta size frequency histogram | Median delta footprint is only $24.2\text{ bytes}$ compared to 4096B uncompressed frames. |
+| **Fig 8** | `fig8_stability_tier_skew.png` | Stacked bar chart: COLD vs WARM vs HOT across Zipf skew ($\alpha=0.6 \to 1.8$) | Proves Module 1 adaptive tiering captures write locality under extreme heap skews. |
+| **Fig 9** | `fig9_literature_comparison_bars.png` | Footprint comparison: Uncompressed vs KSM vs UKSM vs Difference Engine vs AMDEC | Visually demonstrates AMDEC's $74.3\%$ footprint reduction vs exact-only baselines. |
+
+---
+
 ## 6. Ablation Studies Analysis
 
 To prove that every architectural module earns its place in the AMDEC system, three formal ablation studies were executed:
