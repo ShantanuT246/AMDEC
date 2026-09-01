@@ -177,23 +177,26 @@ Across the literature, every existing system falls into one of three incomplete 
 - **Positional Chunking:** Page sliced into $32 \times 128\text{B}$ sub-blocks, prefixed with 2-byte chunk offset index.
 - **MinHash Fingerprinting:** $K = 32$ permutation hashes computed across positional sub-blocks.
 - **LSH Banding:** Partitioned into $b = 8$ bands of $r = 4$ rows ($K = b \cdot r$). Hash collision in any band identifies candidate pairs.
-- **Complexity Advantage:** Reduces search space from $O(N^2)$ to $O(N)$ expected bucket lookups.
+- **Large-Bucket Exact-Hash Grouping:** In massive buckets ($>64$ pages), pages are pre-grouped by SHA-256 exact digest to prevent component fragmentation while spanning representatives maintain $O(N)$ candidate pair generation.
 - **Verification & Union-Find:** Pairs meeting $J \ge 0.70$ are verified and merged using a disjoint-set data structure with path compression and rank optimization.
 
 ### 4.4 Module 3: Base-Delta Storage Manager (`src/modules/m3_delta_storage.py`)
+- **Phase A Exact-Hash Fast-Track:** If a candidate page is byte-identical to the base, it produces a **6-byte zero-span delta record** (4B base ref + 2B span count) with no XOR computation overhead.
 - **Medoid Selection:** Computes pairwise byte distances across cluster members; picks base page minimizing $\sum_{p \in C} \text{dist}(\text{base}, p)$.
 - **Vectorized XOR Diff + RLE Spans:** Non-zero byte runs encoded as $[(\text{offset}: \text{uint16}, \text{length}: \text{uint16}, \text{data}: \text{bytes})]$.
 - **Strict Metadata-Aware Accounting:**
   $$\text{Delta Record Size} = 4\text{B (Base Ref)} + 2\text{B (Span Count)} + \sum (4\text{B} + \text{len}(\text{span data}))$$
+- **Global Base Fingerprint Registry:** Deduplicates identical base page contents across separate clusters (`sha256(base) -> canonical_cluster_id`) so shared templates are only counted once in storage accounting.
 - **Adaptive Thresholding:**
   $$\text{if } \text{Size}(\text{Delta Record}) > 0.30 \times 4096\text{B} (1228\text{B}) \implies \text{Store as full unmerged page}$$
 
 ### 4.5 Module 4: Computational Acceleration Benchmark (`src/modules/m4_acceleration.py`)
 - Compares pure Python scalar byte loops vs. **NumPy uint64 bitwise XOR** differencing.
-- Processes 8 bytes per CPU instruction, achieving **$182.4\times$ speedup** ($3,173\text{ MB/s}$ throughput).
+- Processes 8 bytes per CPU instruction, achieving **$182\times - 191\times$ speedup** ($>3,100\text{ MB/s}$ throughput).
 
 ### 4.6 Module 5: Simulated COW Fault Handler (`src/modules/m5_cow.py`)
 - **Page Table States:** `FULL_PAGE` (uncompressed), `BASE_PAGE` (shared read-only base), `DELTA_PAGE` (compressed delta).
+- **Immutable Base Backing Store:** Stores master base frames in `cluster_bases[cluster_id]` to guarantee that writing to a base page allocates a private copy without corrupting dependent delta reconstructions.
 - **Read Path:** Reconstructs $\hat{P} = P_{\text{base}} \oplus \text{Apply}(\text{Delta})$ with $100\%$ byte fidelity.
 - **COW Write Path:** Intercepts write $\implies$ reconstructs original content, allocates private `FULL_PAGE`, applies write payload, updates page table, and notifies Module 1 feedback engine.
 
@@ -316,7 +319,7 @@ Here is how AMDEC directly compares with the most prominent published systems fr
 # 1. Activate Environment
 source .venv/bin/activate
 
-# 2. Run All Automated Unit Tests (24/24 passing in ~0.6s)
+# 2. Run All Automated Unit Tests (29/29 passing in ~0.7s)
 pytest tests/ -v
 
 # 3. Execute Single-Command Full End-to-End System Evaluation

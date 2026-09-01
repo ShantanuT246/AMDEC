@@ -204,23 +204,9 @@ class BaseDeltaStorageManager:
 
             delta = self._compute_delta(page, base_page)
 
-            # Adaptive Thresholding: If delta exceeds max ratio, attempt secondary-base fallback.
-            # This handles transitive cluster members that diverge heavily from the medoid.
+            # Adaptive Thresholding: If delta representation exceeds max ratio, keep full page
             if delta.total_storage_bytes > self.max_delta_bytes:
-                best_delta = delta
-                for alt_base in cluster_pages:
-                    if alt_base.page_id == page.page_id or alt_base.page_id == base_page.page_id:
-                        continue
-                    alt_delta = self._compute_delta(page, alt_base)
-                    if alt_delta.total_storage_bytes < best_delta.total_storage_bytes:
-                        best_delta = alt_delta
-                    if best_delta.total_storage_bytes <= self.max_delta_bytes:
-                        break  # Good enough — stop searching
-
-                if best_delta.total_storage_bytes <= self.max_delta_bytes:
-                    compressed.deltas[page.page_id] = best_delta
-                else:
-                    compressed.unmerged_full_pages[page.page_id] = bytearray(page.content)
+                compressed.unmerged_full_pages[page.page_id] = bytearray(page.content)
             else:
                 compressed.deltas[page.page_id] = delta
 
