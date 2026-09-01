@@ -34,14 +34,10 @@
 ### 1.1 The Core Problem
 Modern operating systems, cloud hypervisors, and container runtimes waste substantial physical memory hosting redundant page contents. Standard deduplication engines (such as **Linux Kernel Samepage Merging / KSM** [CITATION REQUIRED] and **VMware Content-Based Page Sharing / CBPS** [CITATION REQUIRED]) operate under a **binary exactness constraint**: two 4096-byte memory pages can only be merged if they are **100% byte-for-byte identical**.
 
-However, empirical systems research reveals that in **anonymous memory heaps** (dynamic allocations in web servers, databases, microservices, and language runtimes):
-- Less than **$7\%$ of pages are exact duplicates**.
-- Up to **$86\%$ of pages are near-duplicates** (sharing identical structural templates, object vtables, or text formats, but differing only in timestamps, counters, or pointer offsets).
-
-Consequently, exact-match deduplicators discard over **$80\%$ of potential memory reduction opportunities**.
+However, empirical systems research reveals that in **anonymous memory heaps** (dynamic allocations in web servers, databases, microservices, and language runtimes), prior work reports substantial near-duplicate potential in memory workloads [CITATION REQUIRED], motivating similarity-aware deduplication. Exact-match deduplicators discard opportunities to compress pages that differ only in timestamps, counters, or pointer offsets.
 
 ### 1.2 The AMDEC Solution
-The **five-module AMDEC architecture** introduces a unified pipeline combining region-aware sampling, similarity-based clustering, and base-delta storage to capture near-duplicate anonymous memory pages without unguided $O(N^2)$ pairwise searching:
+The **five-module AMDEC architecture** introduces a unified design combining region-aware sampling, similarity-based clustering, and base-delta storage for anonymous-memory deduplication:
 
 ```
 [Anonymous Memory Pages]
@@ -58,10 +54,10 @@ The **five-module AMDEC architecture** introduces a unified pipeline combining r
            ▼
 [Module 5: Simulated COW Handler] ─────► Sub-5 µs simulated reconstruction & dynamic feedback quarantine
 ```
-*(Note: Module 4 provides an offline micro-benchmark evaluating vectorized uint64 bitwise differencing overhead).*
+*(Note: Module 4 provides an offline micro-benchmark evaluating vectorized uint64 bitwise differencing performance over a scalar Python implementation).*
 
 ### 1.3 Central Research Hypothesis
-> **Hypothesis:** When anonymous memory contains high proportions of near-duplicate pages, locality-sensitive similarity clustering combined with base-delta representation achieves substantial logical memory reduction ($>70\%$) beyond exact-match deduplicators, while region-aware stability sampling filters volatile pages to prevent Copy-on-Write thrashing, and low simulated reconstruction latencies ($<5\ \mu\text{s}$) demonstrate algorithmic efficiency.
+> **Hypothesis:** When anonymous memory contains high proportions of near-duplicate pages, locality-sensitive similarity clustering combined with base-delta representation achieves substantial logical memory-footprint savings ($>70\%$) on evaluated synthetic workloads beyond exact-match deduplicators, while region-aware stability sampling filters volatile pages to reduce unnecessary similarity processing, and low simulated reconstruction latencies ($<5\ \mu\text{s}$) demonstrate algorithmic efficiency.
 
 ---
 
@@ -71,41 +67,41 @@ The **five-module AMDEC architecture** introduces a unified pipeline combining r
 
 | System / Paper | Year | Target Domain | Technique | Reported Savings | Exact Only? | Near-Dup? | Base-Delta? | Region-Aware? | Primary Architectural Limitation |
 |---|---|---|---|---|---|---|---|---|---|
-| **VMware CBPS** | 2002 | Hypervisor VMs | Periodic hash scan | Up to 60% (homogeneous) | ✅ | ❌ | ❌ | ❌ | Exact-match only; static binary sharing |
-| **Linux KSM** | 2009 | Linux Kernel | Red-black tree scan | ~20–30% (workloads) | ✅ | ❌ | ❌ | ❌ | 1-byte difference blocks merge entirely |
-| **Satori** | 2009 | Xen / Disk I/O | Load-time enlightened sharing | Exploits up to 94% max sharing | ✅ | ❌ | ❌ | ❌ | Restricted to disk-backed pages at I/O read time |
-| **Difference Engine** | 2008 | Xen Hypervisor | Sub-page delta + compression | 40–60% footprint reduction | ❌ | ✅ | ✅ | ❌ | **Unguided $O(N^2)$ pairwise delta search** |
-| **Page Overlays** | 2013 | HW-Assisted Cache | Fine-grained page merging | 15–35% footprint reduction | ❌ | ✅ | Partial | ❌ | Requires custom CPU hardware; no clustering |
-| **BCD Deduplication** | 2017 | OS Sub-page | Byte-level content differencing | 20–40% sub-page reduction | ❌ | ✅ | ✅ | ❌ | No upstream clustering stage; high pairwise cost |
-| **Sparrow** | 2024 | Android OS | Intra-page block sampling | Identifies 86.1% near-dup potential | ❌ | ✅ | Partial | ❌ | Demonstrates the problem; no general clustering framework |
-| **De2Dup / dbDedup** | 2024 | In-Memory DBs | Intel DSA hardware delta | 30–50% reduction in DB heaps | ❌ | ✅ | ✅ | ❌ | Domain-specific to columnar DBs; requires Intel DSA |
-| **UKSM** | 2018 | Linux Kernel | Hierarchical distilling | Up to 5x over CBPS | ✅ | ❌ | ❌ | ✅ | Region-awareness applied to **exact-match only** |
-| **CKSM** | 2024 | Linux Containers | Physical-memory-space scan | 60–80% CPU scan reduction | ✅ | ❌ | ❌ | ✅ | Still fundamentally exact-match only |
-| **PAMD** | 2024 | Dynamic Control | Process-aware loop joining | Workload-dependent ROI | ✅ | ❌ | ❌ | Partial | Process-level tuning; blind to content similarity |
-| **SiLo** | 2011 | Backup Storage | Similarity + locality clustering | ~90% storage reduction | ❌ | ✅ | ❌ | ❌ | Storage/backup dedup; not live RAM |
-| **I/O Deduplication** | 2010 | Storage Caching | Content-based disk caching | 28–47% I/O reduction | ❌ | ✅ | ❌ | ❌ | Block I/O domain; not OS virtual memory |
-| **TSM / CISWH** | 2024 | Edge File Storage | Threshold similarity hashing | 43.2% edge storage reduction | ❌ | ✅ | ❌ | ❌ | Applied to files; no COW memory recovery |
-| **Hardware DSA Engines**| 2024 | Accelerator Silicon | Hardware DMA offloaded diff | Offloads CPU during diff | ❌ | ✅ | ✅ | ❌ | Hardware-dependent; isolated to DB engines |
-| **Garg et al.** | 2020 | GPU Computing | GPU-parallel similarity scan | 5x–10x matching speedup | ❌ | ✅ | ❌ | ❌ | Requires GPU; no base-delta storage pipeline |
-| **CMDP** | 2022 | Cloud Hypervisors | Banked memory domain isolation | 25–35% search reduction | ✅ | ❌ | ❌ | ✅ | Domain partitioning; exact-match only |
-| **ORC** | 2023 | CHERI Architecture | Capability object sharing | Lowers hypervisor tail-latency | ✅ | ❌ | ❌ | ❌ | Requires CHERI hardware; exact sharing only |
-| **AMDEC (Ours)** | **2026** | **Anonymous Heaps** | **Sampling + LSH + Base-Delta** | **73.60% logical savings** | ❌ | ✅ | ✅ | ✅ | **Unified design combining sampling, LSH, and base-delta** |
+| **VMware CBPS** [CITATION REQUIRED] | 2002 | Hypervisor VMs | Periodic hash scan | Up to 60% (homogeneous) | ✅ | ❌ | ❌ | ❌ | Exact-match only; static binary sharing |
+| **Linux KSM** [CITATION REQUIRED] | 2009 | Linux Kernel | Red-black tree scan | ~20–30% (workloads) | ✅ | ❌ | ❌ | ❌ | 1-byte difference blocks merge entirely |
+| **Satori** [CITATION REQUIRED] | 2009 | Xen / Disk I/O | Load-time enlightened sharing | Exploits up to 94% max sharing | ✅ | ❌ | ❌ | ❌ | Restricted to disk-backed pages at I/O read time |
+| **Difference Engine** [CITATION REQUIRED] | 2008 | Xen Hypervisor | Sub-page delta + compression | 40–60% footprint reduction | ❌ | ✅ | ✅ | ❌ | **Unguided $O(N^2)$ pairwise delta search** |
+| **Page Overlays** [CITATION REQUIRED] | 2013 | HW-Assisted Cache | Fine-grained page merging | 15–35% footprint reduction | ❌ | ✅ | Partial | ❌ | Requires custom CPU hardware; no clustering |
+| **BCD Deduplication** [CITATION REQUIRED] | 2017 | OS Sub-page | Byte-level content differencing | 20–40% sub-page reduction | ❌ | ✅ | ✅ | ❌ | No upstream clustering stage; high pairwise cost |
+| **Sparrow** [CITATION REQUIRED] | 2024 | Android OS | Intra-page block sampling | Identifies near-dup potential | ❌ | ✅ | Partial | ❌ | Demonstrates problem; no general clustering framework |
+| **De2Dup / dbDedup** [CITATION REQUIRED] | 2024 | In-Memory DBs | Intel DSA hardware delta | 30–50% reduction in DB heaps | ❌ | ✅ | ✅ | ❌ | Domain-specific to columnar DBs; requires Intel DSA |
+| **UKSM** [CITATION REQUIRED] | 2018 | Linux Kernel | Hierarchical distilling | Up to 5x over CBPS | ✅ | ❌ | ❌ | ✅ | Region-awareness applied to **exact-match only** |
+| **CKSM** [CITATION REQUIRED] | 2024 | Linux Containers | Physical-memory-space scan | 60–80% CPU scan reduction | ✅ | ❌ | ❌ | ✅ | Still fundamentally exact-match only |
+| **PAMD** [CITATION REQUIRED] | 2024 | Dynamic Control | Process-aware loop joining | Workload-dependent ROI | ✅ | ❌ | ❌ | Partial | Process-level tuning; blind to content similarity |
+| **SiLo** [CITATION REQUIRED] | 2011 | Backup Storage | Similarity + locality clustering | ~90% storage reduction | ❌ | ✅ | ❌ | ❌ | Storage/backup dedup; not live RAM |
+| **I/O Deduplication** [CITATION REQUIRED] | 2010 | Storage Caching | Content-based disk caching | 28–47% I/O reduction | ❌ | ✅ | ❌ | ❌ | Block I/O domain; not OS virtual memory |
+| **TSM / CISWH** [CITATION REQUIRED] | 2024 | Edge File Storage | Threshold similarity hashing | 43.2% edge storage reduction | ❌ | ✅ | ❌ | ❌ | Applied to files; no COW memory recovery |
+| **Hardware DSA Engines** [CITATION REQUIRED]| 2024 | Accelerator Silicon | Hardware DMA offloaded diff | Offloads CPU during diff | ❌ | ✅ | ✅ | ❌ | Hardware-dependent; isolated to DB engines |
+| **Garg et al.** [CITATION REQUIRED] | 2020 | GPU Computing | GPU-parallel similarity scan | 5x–10x matching speedup | ❌ | ✅ | ❌ | ❌ | Requires GPU; no base-delta storage pipeline |
+| **CMDP** [CITATION REQUIRED] | 2022 | Cloud Hypervisors | Banked memory domain isolation | 25–35% search reduction | ✅ | ❌ | ❌ | ✅ | Domain partitioning; exact-match only |
+| **ORC** [CITATION REQUIRED] | 2023 | CHERI Architecture | Capability object sharing | Lowers hypervisor tail-latency | ✅ | ❌ | ❌ | ❌ | Requires CHERI hardware; exact sharing only |
+| **AMDEC (Ours)** | **2026** | **Anonymous Heaps** | **Sampling + LSH + Base-Delta** | **73.60% logical savings** | ❌ | ✅ | ✅ | ✅ | **Unified design combining sampling, LSH, & base-delta** |
 
-*Note: Baseline savings figures are reported values from prior literature cited under conceptual comparison, not same-machine measurements.*
+*Note: All literature figures are reported values from prior publications cited under conceptual comparison, not same-machine measurements.*
 
 ### 2.2 The Identified Research Gap
 Across the literature, existing systems fall into three incomplete categories:
-1. **Exact-Match Systems (KSM, UKSM, CKSM, CBPS):** Low retrieval latency, but misses up to $86\%$ of near-duplicates in anonymous memory.
+1. **Exact-Match Systems (KSM, UKSM, CKSM, CBPS):** Low retrieval latency, but misses near-duplicate pages in anonymous memory.
 2. **Sub-Page Delta Systems (Difference Engine, BCD):** Capable of delta storage, but lacks upstream similarity clustering $\implies$ suffers from an unguided $O(N^2)$ pairwise comparison bottleneck.
 3. **Similarity Storage Systems (SiLo, TSM):** Uses LSH for clustering, but restricted to high-latency offline disk/backup storage without low-latency memory recovery.
 
-To the best of our knowledge, **AMDEC explores a unified design** combining region-aware sampling, MinHash-LSH similarity clustering, and base-delta encoding for anonymous memory deduplication.
+To the best of our knowledge, **AMDEC explores a unified design** combining region-aware sampling, MinHash-LSH similarity clustering, and base-delta encoding for anonymous-memory deduplication.
 
 ---
 
 ## 3. System Architecture & Five-Module Pipeline
 
-The **five-module AMDEC architecture** is organized into a primary storage pipeline (Modules 1–3), an acceleration benchmark (Module 4), and a simulated Copy-on-Write reconstruction handler (Module 5):
+The **five-module AMDEC architecture** is organized into a primary storage pipeline (Modules 1–3), an offline acceleration micro-benchmark (Module 4), and a simulated Copy-on-Write reconstruction handler (Module 5):
 
 ```
                     ┌──────────────────────────────────────────────┐
@@ -138,9 +134,9 @@ The **five-module AMDEC architecture** is organized into a primary storage pipel
                      ┌─────────────────────┴─────────────────────┐
                      ▼                                           ▼
 ┌───────────────────────────────────────────┐ ┌───────────────────────────────────────────┐
-│ Module 4: Acceleration Benchmark          │ │ Module 5: Simulated COW Handler           │
+│ Module 4: Offline Acceleration Benchmark  │ │ Module 5: Simulated COW Handler           │
 │ - NumPy uint64 Vectorized Bitwise Diff    │ │ - Page Table State Machine                │
-│ - Micro-benchmark vs Scalar Python        │ │ - Sub-5 µs Simulated Read Reconstruction  │
+│ - Offline micro-benchmark vs Scalar Python│ │ - Sub-5 µs Simulated Read Reconstruction  │
 └───────────────────────────────────────────┘ └───────────────────────────────────────────┘
 ```
 
@@ -149,13 +145,13 @@ The **five-module AMDEC architecture** is organized into a primary storage pipel
 ## 4. Module-by-Module Technical Specification
 
 ### 4.1 Workload Generator (`src/workload/page_generator.py`)
-- **Deterministic RNG Encapsulation:** Uses instance-isolated `self.rng = random.Random(seed)` and `self.np_rng = np.random.default_rng(seed)` (no `os.urandom()` calls) to guarantee $100\%$ bitwise deterministic page generation across runs.
-- **Realistic Heap Models:** Struct arrays (64B C++ structs with vtable pointers and timestamps), pointer tables (512 8B pointers), and semi-sparse JSON buffers.
+- **Deterministic RNG Encapsulation:** Uses instance-isolated `self.rng = random.Random(seed)` and `self.np_rng = np.random.default_rng(seed)` (no `os.urandom()` calls) to provide deterministic workload generation for the configured random seeds and supported execution environment.
+- **Heap Models:** Struct arrays (64B C++ structs with vtable pointers and timestamps), pointer tables (512 8B pointers), and semi-sparse JSON buffers.
 - **Zipfian Write Simulation:** Simulates non-uniform write traffic using a Zipfian distribution ($\alpha = 1.3$).
 
 ### 4.2 Module 1: Region-Aware Sampling & Feedback Engine (`src/modules/m1_sampling.py`)
 - **Stability Tiering:** Classifies pages into `HOT` (high write frequency / recent COW break), `WARM` (moderate activity), and `COLD` (long-lived, low write frequency).
-- **Filtering & Priority Queue:** Queues `COLD` and `WARM` pages into a min-heap sorted by priority score. Filters out `HOT` pages to prevent downstream LSH pair generation and COW thrashing.
+- **Filtering & Priority Queue:** Queues `COLD` and `WARM` pages into a min-heap sorted by priority score. Filters out `HOT` pages and quarantines recently faulting pages, providing an architectural mechanism intended to reduce unnecessary similarity processing and repeated COW exposure.
 - **Dynamic COW Feedback:** Intercepts Copy-on-Write write faults and temporarily quarantines faulting pages for $30\text{ seconds}$.
 
 ### 4.3 Module 2: MinHash-LSH Clustering Engine (`src/modules/m2_lsh_clustering.py`)
@@ -172,12 +168,12 @@ The **five-module AMDEC architecture** is organized into a primary storage pipel
 - **Strict Metadata-Aware Accounting:**
   $$\text{Delta Record Size} = 4\text{B (Base Ref)} + 2\text{B (Span Count)} + \sum (4\text{B} + \text{len}(\text{span data}))$$
 - **Global Base Fingerprint Registry:** Deduplicates identical base page contents across separate clusters (`sha256(base) -> canonical_cluster_id`) so shared templates are only counted once in storage accounting.
-- **30% Fallback Safety Net:**
+- **Architectural Safety Mechanism:**
   $$\text{if } \text{Size}(\text{Delta Record}) > 0.30 \times 4096\text{B} (1228\text{B}) \implies \text{Store as full unmerged page}$$
 
-### 4.5 Module 4: Computational Acceleration Benchmark (`src/modules/m4_acceleration.py`)
-- Compares pure Python scalar byte loops vs. **NumPy uint64 bitwise XOR** differencing.
-- Demonstrates an offline **$198.0\times \pm 7.7\times$ speedup** of NumPy uint64 vectorization over scalar Python loops ($>3,100\text{ MB/s}$ throughput), showing the suitability of vectorized execution for delta generation.
+### 4.5 Module 4: Offline Acceleration Benchmark (`src/modules/m4_acceleration.py`)
+- Offline Python micro-benchmark comparing pure Python scalar byte loops vs. **NumPy uint64 bitwise XOR** differencing.
+- Demonstrates a **$198.0\times \pm 7.7\times$ speedup of NumPy uint64 vectorized differencing over the scalar Python implementation** ($>3,100\text{ MB/s}$ throughput), suggesting suitability for SIMD-oriented implementations.
 
 ### 4.6 Module 5: Simulated COW Fault Handler (`src/modules/m5_cow.py`)
 - **Page Table States:** `FULL_PAGE` (uncompressed), `BASE_PAGE` (shared read-only base), `DELTA_PAGE` (compressed delta).
@@ -190,7 +186,7 @@ The **five-module AMDEC architecture** is organized into a primary storage pipel
 ## 5. Experimental Methodology
 
 ### 5.1 Primary Metric Definitions
-- **Baseline Footprint:** Total uncompressed raw memory ($N \times 4096\text{ bytes}$).
+- **Baseline Footprint:** Total uncompressed raw memory ($N \times 4096\text{ bytes}$). For $N=10,000$, baseline footprint is $40,960,000\text{ bytes}$ ($39.06\text{ MB}$).
 - **AMDEC Logical Footprint:** Sum of base page frames, compressed delta records (including metadata headers), unmerged fallback pages, and unique unclustered pages.
 - **Logical Memory Savings (%):**
   $$\text{Savings} = \left(1 - \frac{\text{AMDEC Logical Footprint}}{\text{Baseline Footprint}}\right) \times 100\%$$
@@ -198,15 +194,15 @@ The **five-module AMDEC architecture** is organized into a primary storage pipel
   $$\text{Compression Ratio} = \frac{\text{Baseline Footprint}}{\text{AMDEC Logical Footprint}}$$
 
 ### 5.2 Testbed & Software Environment
-- **Operating System:** macOS (Darwin arm64) [TO BE VERIFIED FOR KERNEL BUILD]
-- **CPU / Memory Hardware:** Apple Silicon / Host Workstation Architecture [TO BE VERIFIED]
+- **Operating System:** macOS (Darwin arm64) [VERIFY]
+- **CPU / Memory Hardware:** Host Workstation Architecture [VERIFY]
 - **Python Environment:** Python 3.9.6
 - **Core Libraries:** NumPy (v1.26+), datasketch (v1.5+), SciPy (v1.11+), Pandas, Matplotlib, pytest
 
 ### 5.3 Workload & Hyperparameter Configuration
 - **Primary Workload ($N=10,000$):** 4096-byte pages, 80% near-duplicates (mutation rates 0.2%–1.2%), 7% exact duplicates, 13% unique pages. Zipf write skew ($\alpha = 1.3$).
 - **Module 2 LSH:** $K=32$ MinHash permutations, $b=8$ bands, $r=4$ rows/band, Jaccard similarity threshold $J = 0.70$.
-- **Module 3 Delta:** Adaptive threshold $\delta_{\text{max}} = 0.30$ (1228B limit), medoid base selection.
+- **Module 3 Delta:** Delta threshold $\delta_{\text{max}} = 0.30$ (1228B limit), medoid base selection.
 - **Random Seeds & Trials:** Seeds 42–51 across 10 independent trials for primary evaluation; 5 trials per point for parameter sweeps and paired ablations.
 
 ### 5.4 Evaluated Baselines
@@ -221,22 +217,23 @@ The **five-module AMDEC architecture** is organized into a primary storage pipel
 
 ### 6.1 Primary Multi-Trial System Evaluation ($N = 10,000$ Pages, 10 Independent Trials)
 
-Evaluated across 10 randomized trials (seeds 42–51) on $N = 10,000$ pages ($39.06\text{ MB}$ uncompressed). All values are reported as **Mean $\pm$ Sample Std.Dev** alongside **95% Student's t Confidence Intervals (CI)**.
+Evaluated across 10 randomized trials (seeds 42–51) on $N = 10,000$ pages ($39.06\text{ MB}$ uncompressed baseline footprint). All values are reported as **Mean $\pm$ Sample Std.Dev** alongside **95% Student's t Confidence Intervals (CI)**.
 
-| Metric | Measured Result (Mean ± Std) | 95% Confidence Interval | Median [Min, Max] | Significance / Notes |
+| Metric | Measured Result (Mean ± Std) | 95% Confidence Interval | Median [Min, Max] | Notes / Context |
 |---|---|---|---|---|
-| **Baseline Uncompressed Footprint** | $39.06\text{ MB}$ (Fixed) | [Fixed Baseline] | $39.06\text{ MB}$ | Raw unshared allocation |
+| **Baseline Uncompressed Footprint** | $39.06\text{ MB}$ (Fixed) | [Fixed Baseline] | $39.06\text{ MB}$ | Raw unshared allocation ($40.96\text{ MB}$) |
 | **AMDEC Logical Footprint** | **$10.31 \pm 0.32\text{ MB}$** | **[10.08, 10.55] MB** | $10.30\ [9.90, 10.85]$ | Base pages + deltas + metadata |
-| **Logical Memory Savings** | **$73.60\% \pm 0.83\%$** | **[73.00%, 74.19%]** | **73.64% [72.21%, 74.67%]** | **$3.79\times \pm 0.12\times$ effective compression** |
+| **Logical Memory Savings** | **$73.60\% \pm 0.83\%$** | **[73.00%, 74.19%]** | **73.64% [72.21%, 74.67%]** | Evaluated synthetic workload |
+| **Effective Compression Ratio** | **$3.79\times \pm 0.12\times$** | **[3.71x, 3.88x]** | $3.79\times\ [3.60\times, 3.95\times]$ | Ratio of baseline to logical footprint |
 | **M1 Volatile Scan Reduction** | **$8.20\% \pm 0.36\%$** | **[7.94%, 8.46%]** | $8.07\%\ [7.82\%, 8.75\%]$ | Skips volatile HOT working set |
-| **M2 LSH Candidate Reduction** | **$99.845\% \pm 0.007\%$** | **[99.840%, 99.850%]** | $99.846\%\ [99.833\%, 99.854\%]$ | Evaluated ~70.5K pairs vs 50M brute-force |
+| **M2 LSH Candidate Reduction** | **$99.845\% \pm 0.007\%$** | **[99.840%, 99.850%]** | $99.846\%\ [99.833\%, 99.854\%]$ | ~70.5K candidates vs 50M possible pairs |
 | **Similarity Clusters Formed** | $147.4 \pm 9.2\text{ clusters}$ | [140.8, 154.0] | $148.5\ [127, 161]$ | Near-duplicate groupings |
 | **Mean Delta Storage Footprint** | **$24.7 \pm 2.2\text{ bytes / page}$** | **[23.1, 26.2] B** | $24.2\ [22.3, 29.1]\text{ B}$ | Including record headers & offset metadata |
-| **Mean Simulated Reconstruction Latency** | **$1.75 \pm 0.42\ \mu\text{s}$** | **[1.45, 2.05] $\mu\text{s}$** | $1.59\ [1.39, 2.78]\ \mu\text{s}$ | Low on-demand retrieval penalty |
-| **Pooled Reconstruction Latency (P50/P95/P99)** | **$1.58\ \mu\text{s} / 3.88\ \mu\text{s} / 4.58\ \mu\text{s}$** | Aggregate distribution | Across 7,000 access samples | Bounded tail latency ($<10\ \mu\text{s}$) |
-| **NumPy Vectorization Speedup** | **$198.0\times \pm 7.7\times$** | **[192.6x, 203.5x]** | $199.3\times\ [180.0\times, 206.6\times]$ | uint64 vectorized diff vs scalar Python |
+| **Mean Simulated Reconstruction Latency** | **$1.75 \pm 0.42\ \mu\text{s}$** | **[1.45, 2.05] $\mu\text{s}$** | $1.59\ [1.39, 2.78]\ \mu\text{s}$ | Userspace simulation measurement |
+| **Pooled Reconstruction Latency (P50/P95/P99)** | **$1.58\ \mu\text{s} / 3.88\ \mu\text{s} / 4.58\ \mu\text{s}$** | Aggregate distribution | Across 7,000 access samples | Bounded tail latency in simulation |
+| **NumPy Vectorization Speedup** | **$198.0\times \pm 7.7\times$** | **[192.6x, 203.5x]** | $199.3\times\ [180.0\times, 206.6\times]$ | Offline uint64 diff vs scalar Python |
 | **Total Simulation Runtime** | $4284.6 \pm 80.0\text{ ms}$ | [4227.4, 4341.9] ms | $4271.6\ [4189.1, 4436.3]\text{ ms}$ | End-to-end Python pipeline |
-| **Pipeline Throughput** | $2,335 \pm 43\text{ pages/sec}$ | [2304, 2365] pps | $2341\ [2254, 2387]\text{ pps}$ | Sustained processing rate |
+| **Pipeline Throughput** | $2,335 \pm 43\text{ pages/sec}$ | [2304, 2365] pps | $2341\ [2254, 2387]\text{ pps}$ | Python execution rate |
 
 ---
 
@@ -247,10 +244,10 @@ Demonstrates AMDEC's operational boundary on synthetic workloads: as pages diver
 
 | Mutation Rate | Word Mutations | Logical Memory Savings (Mean ± Std) | 95% Confidence Interval | Compression Ratio | Mean Delta Size | Operational Status |
 |---|---|---|---|---|---|---|
-| **0.1%** | 1 word (8B) | **86.67% ± 0.07%** | [86.59%, 86.76%] | $7.50\times$ | $18.2\text{ B}$ | Optimal sharing |
+| **0.1%** | 1 word (8B) | **86.67% ± 0.07%** | [86.59%, 86.76%] | $7.50\times$ | $18.2\text{ B}$ | High template similarity |
 | **0.5%** | 2–3 words (24B) | **86.43% ± 0.14%** | [86.26%, 86.60%] | $7.37\times$ | $24.0\text{ B}$ | Typical heap object drift |
-| **1.0%** | 5 words (40B) | **68.54% ± 7.92%** | [58.71%, 78.38%] | $3.18\times$ | $38.4\text{ B}$ | High sharing |
-| **2.0%** | 10 words (80B) | **11.83% ± 3.08%** | [8.00%, 15.65%] | $1.13\times$ | $68.1\text{ B}$ | Selective sharing |
+| **1.0%** | 5 words (40B) | **68.54% ± 7.92%** | [58.71%, 78.38%] | $3.18\times$ | $38.4\text{ B}$ | Moderate sharing |
+| **2.0%** | 10 words (80B) | **11.83% ± 3.08%** | [8.00%, 15.65%] | $1.13\times$ | $68.1\text{ B}$ | Low sharing |
 | **5.0%** | 25 words (200B)| **6.96% ± 0.00%** | [6.96%, 6.96%] | $1.07\times$ | — | LSH Jaccard boundary ($<0.70$) |
 | **10.0%+**| $\ge 51$ words | **6.96% ± 0.00%** | [6.96%, 6.96%] | $1.07\times$ | — | Exact duplicates only |
 
@@ -280,7 +277,7 @@ To test the adaptive 30% delta fallback mechanism, an adversarial workload gener
 | **50%** | 6.96% ± 0.00% | 6.96% ± 0.00% | 6.0 B | 6.0 B | 0 | +0.00% |
 | **60%** | 6.96% ± 0.00% | 6.96% ± 0.00% | 6.0 B | 6.0 B | 0 | +0.00% |
 
-**System Insight:** At mutation rates $\ge 5\%$, Jaccard similarity drops below the $0.70$ threshold required by Module 2 (MinHash-LSH). As a result, **Module 2 never forms clusters from high-mutation pages in the first place** — they remain as unclustered singletons. Because low-similarity pages are pruned by LSH upstream, Module 3 receives only valid, high-similarity clusters. Thus, the experiment did not demonstrate additional measured storage savings for adaptive thresholding because LSH filters sufficiently dissimilar pages before Module 3. The 30% adaptive threshold serves as an **architectural safety mechanism** rather than an active driver of measured compression in standard operation.
+**System Insight:** At mutation rates $\ge 5\%$, Jaccard similarity drops below the $0.70$ threshold required by Module 2 (MinHash-LSH). As a result, **Module 2 never forms clusters from high-mutation pages in the first place** — they remain as unclustered singletons. Because low-similarity pages are pruned by LSH upstream, Module 3 receives only valid, high-similarity clusters. Thus, the experiment did not demonstrate additional measured storage savings for adaptive thresholding because LSH filters sufficiently dissimilar pages before Module 3. The 30% adaptive threshold serves as an **architectural safety mechanism** rather than a demonstrated driver of compression improvements in standard operation.
 
 ---
 
@@ -300,7 +297,7 @@ To eliminate Python interpreter scheduling noise, an isolated micro-benchmark (`
 **Clarification of M1 Efficacy**:
 1. **Pages Filtered**: M1 filters **7.1% of pages as HOT** (710 volatile pages) from downstream similarity processing.
 2. **M1 Computational Cost**: M1 introduces an additional classification overhead of ~25 ms per full scan (~306K pages/sec vs ~1.37M pages/sec uniform scan).
-3. **Pipeline Function**: M1's purpose is **reducing downstream candidate generation, avoiding processing of volatile pages, and supporting COW-feedback quarantine**, rather than making the initial scan pass faster.
+3. **Pipeline Function**: M1 adds classification overhead but filters volatile pages from downstream similarity processing to reduce candidate generation and avoid processing volatile pages.
 
 ---
 
@@ -317,7 +314,7 @@ Evaluated across scale points $N = 1,000, 2,500, 5,000, 10,000$ with a 15-second
 
 - **Largest N where brute force completed within timeout**: $N = 2,500$ (3.5s vs 0.79s LSH, 4.4x measured speedup, 95.0% cluster agreement).
 - At $N = 5,000$ and $N = 10,000$, brute force exceeded the 15-second timeout.
-- At $N = 10,000$, LSH processed **70,560 candidate pairs** out of **49,995,000 total possible pairs** — achieving a **99.859% candidate-search-space reduction** (demonstrating sub-quadratic candidate generation under the evaluated workload).
+- At $N = 10,000$, LSH processed **70,560 candidate pairs** out of **49,995,000 total possible pairs** — achieving a **99.859% candidate-search-space reduction** (demonstrating sub-quadratic candidate generation over the tested range).
 
 ---
 
@@ -326,11 +323,11 @@ Evaluated across scale points $N = 1,000, 2,500, 5,000, 10,000$ with a 15-second
 | Figure | Filename | Visual Representation | Corrected Academic Description |
 |---|---|---|---|
 | **Fig 1** | `fig1_mutation_sensitivity.png` | Dual-axis curve: Mutation % ($0.1\% \to 30\%$) vs Savings (%) & Delta bytes (with 95% CI error bars) | Degradation curve of savings under byte drift on synthetic workload. |
-| **Fig 2** | `fig2_similarity_composition.png` | Bar chart with compression factors: Near-dup ratio ($20\% \to 80\%$) with 95% CI error bars | Demonstrates sensitivity of savings to heap near-duplicate density. |
+| **Fig 2** | `fig2_similarity_composition.png` | Bar chart with compression factors: Near-dup ratio ($20\% \to 80\%$) with 95% CI error bars | Sensitivity of savings to heap near-duplicate density on synthetic workload. |
 | **Fig 3** | `fig3_reconstruction_latency_cdf.png` | High-res Empirical CDF with Median (P50), P95, and P99 threshold lines (Pooled 7,000 samples) | Distribution of simulated page reconstruction latencies ($P50 = 1.58\ \mu\text{s}$, $P95 = 3.88\ \mu\text{s}$, $P99 = 4.58\ \mu\text{s}$). |
-| **Fig 4** | `fig4_ablation_comparison.png` | Dual subplot: M1 candidate filtering & LSH search space reduction | Shows M1 filters 7.1% volatile pages and LSH skips 98.1%–99.8% of candidate pairs. |
-| **Fig 5** | `fig5_acceleration_throughput.png` | Throughput comparison: Scalar Python loop vs NumPy uint64 vectorized diff | Demonstrates $198.0\times$ speedup of NumPy uint64 vectorization over scalar Python implementation. |
-| **Fig 6** | `fig6_scalability_throughput.png` | Dual-axis scalability: $1\text{K} \to 20\text{K}$ pages vs Runtime (ms) & Pages/sec (with 95% CI error bars) | Sub-quadratic candidate indexing scaling across expanding memory datasets. |
+| **Fig 4** | `fig4_ablation_comparison.png` | Dual subplot: M1 candidate filtering & LSH search space reduction | Shows M1 filters 7.1% volatile pages and LSH reduces candidate pairs by 98.1%–99.8%. |
+| **Fig 5** | `fig5_acceleration_throughput.png` | Throughput comparison: Scalar Python loop vs NumPy uint64 vectorized diff | Demonstrates $198.0\times$ speedup of NumPy uint64 vectorized differencing over scalar Python implementation. |
+| **Fig 6** | `fig6_scalability_throughput.png` | Dual-axis scalability: $1\text{K} \to 20\text{K}$ pages vs Runtime (ms) & Pages/sec (with 95% CI error bars) | Sub-quadratic candidate indexing scaling over tested workload range. |
 | **Fig 7** | `fig7_delta_size_distribution.png` | Boxplot vs 4096B page + Delta size frequency histogram | Median delta footprint is $24.2\text{ bytes}$ compared to 4096B uncompressed frames. |
 | **Fig 8** | `fig8_stability_tier_skew.png` | Stacked bar chart: COLD vs WARM vs HOT across Zipf skew ($\alpha=0.6 \to 1.8$) | Module 1 tier classification under varying Zipf write traffic skew. |
 | **Fig 9** | `fig9_literature_comparison_bars.png` | Footprint comparison: Uncompressed vs KSM vs UKSM vs Difference Engine vs AMDEC | Conceptual comparison of logical footprint vs values reported in prior literature. |
@@ -362,19 +359,19 @@ Evaluated across scale points $N = 1,000, 2,500, 5,000, 10,000$ with a 15-second
 │ System                   │ Reported     │ Strategy      │ How AMDEC Solves Limitation  │
 │                          │ Reduction    │               │                              │
 ├──────────────────────────┼──────────────┼───────────────┼──────────────────────────────┤
-│ VMware CBPS (2002)       │ 20–60%       │ Exact SHA-1   │ CBPS misses near-duplicates; │
+│ VMware CBPS [CITATION REQUIRED] 2002  │ 20–60%       │ Exact SHA-1   │ CBPS misses near-duplicates; │
 │                          │              │               │ AMDEC captures +45% savings. │
 ├──────────────────────────┼──────────────┼───────────────┼──────────────────────────────┤
-│ Linux KSM (2009)         │ 20–30%       │ Exact memcmp  │ 1-byte diff blocks KSM merge;│
+│ Linux KSM [CITATION REQUIRED] 2009   │ 20–30%       │ Exact memcmp  │ 1-byte diff blocks KSM merge;│
 │                          │              │               │ AMDEC stores compact deltas. │
 ├──────────────────────────┼──────────────┼───────────────┼──────────────────────────────┤
-│ UKSM (2018) / CKSM (2024)│ 25–35%       │ Region Distill│ Region-aware for exact only; │
+│ UKSM / CKSM [CITATION REQUIRED] 2018 │ 25–35%       │ Region Distill│ Region-aware for exact only; │
 │                          │              │               │ AMDEC applies it to near-dup.│
 ├──────────────────────────┼──────────────┼───────────────┼──────────────────────────────┤
-│ Difference Engine (2008) │ 40–60%       │ Pairwise diff │ Suffered O(N²) search cost;  │
+│ Difference Engine [CITATION REQUIRED]│ 40–60%       │ Pairwise diff │ Suffered O(N²) search cost;  │
 │                          │              │               │ AMDEC LSH cuts pairs 99.85%. │
 ├──────────────────────────┼──────────────┼───────────────┼──────────────────────────────┤
-│ SiLo (2011) / TSM (2024) │ ~43–90%      │ LSH on disk   │ SiLo is for offline backup;  │
+│ SiLo / TSM [CITATION REQUIRED]       │ ~43–90%      │ LSH on disk   │ SiLo is for offline backup;  │
 │                          │              │               │ AMDEC runs live in memory.   │
 ├──────────────────────────┼──────────────┼───────────────┼──────────────────────────────┤
 │ AMDEC (This Work)        │ 73.60%       │ Sampling+LSH+ │ Unified design combining     │
@@ -426,7 +423,7 @@ AMDEC/
 │       ├── m1_sampling.py           # Module 1: Region-aware stability tiering & feedback
 │       ├── m2_lsh_clustering.py     # Module 2: MinHash + LSH clustering engine
 │       ├── m3_delta_storage.py      # Module 3: Medoid base selection & delta RLE storage
-│       ├── m4_acceleration.py       # Module 4: SIMD uint64 vectorized diff benchmark
+│       ├── m4_acceleration.py       # Module 4: Offline SIMD uint64 vectorized diff benchmark
 │       └── m5_cow.py                # Module 5: Simulated COW fault handler & nanosecond timer
 ├── configs/
 │   └── default_experiment.json      # Machine-readable experiment hyperparameters
@@ -465,16 +462,16 @@ AMDEC/
 
 ## 10. Research Paper Claims Audit & Honesty Check
 
-| Claim | Status | Evidence | Safe Paper Wording |
-|:---|:---:|:---|:---|
-| **Adaptive delta threshold reduces unnecessary storage** | **NOT DEMONSTRATED** | MinHash-LSH (Module 2) filters low-similarity pairs ($<0.70$) before Module 3. High-delta pages do not form clusters. | "The 30% delta fallback serves as an architectural safety mechanism that prevents inefficient delta records when a delta exceeds the configured storage threshold." |
-| **M1 reduces unnecessary scanning** | **PARTIALLY SUPPORTED** | M1 filters **7.1% of pages as HOT** from downstream LSH clustering, but M1 classification adds ~25ms overhead (32.77 ms vs 7.33 ms uniform scan). | "M1 filters volatile pages from downstream similarity processing, at the cost of additional classification overhead." |
-| **LSH substantially reduces pair search** | **SUPPORTED** | Candidate pair reduction of **98.07% at N=1,000** to **99.859% at N=10,000** (70.5K vs 50M pairs), 4.4x measured speedup at N=2,500. | "MinHash-LSH achieves a 99.859% candidate-search-space reduction at N=10,000, demonstrating sub-quadratic candidate generation." |
-| **AMDEC achieves ~73.6% memory savings** | **SUPPORTED** | Across 10 multi-trial primary runs ($N=10,000$), mean logical savings is **73.60% ± 0.83%** (95% CI: [73.00%, 74.19%]), compression ratio **3.79x ± 0.12x**. | "AMDEC achieved 73.60% ± 0.83% logical memory savings on the evaluated synthetic anonymous-memory workload." |
-| **Reconstruction latency is low in simulation** | **SUPPORTED** | Mean simulated reconstruction latency is **1.75 ± 0.42 µs**. Pooled percentiles across 7,000 accesses: **P50 = 1.58 µs, P95 = 3.88 µs, P99 = 4.58 µs**. | "Mean simulated reconstruction latency was measured at 1.75 ± 0.42 µs (P95 = 3.88 µs)." |
-| **NumPy uint64 differencing acceleration** | **SUPPORTED** | Offline benchmark shows **198.0x ± 7.7x speedup** of NumPy uint64 vectorized differencing over scalar Python loops. | "Demonstrates a 198.0x ± 7.7x speedup of NumPy uint64 vectorized differencing over the scalar Python implementation, suggesting suitability for SIMD-oriented execution." |
-| **Novelty / First Claim** | **PARTIALLY SUPPORTED** | Literature survey covers 18 systems across 3 incomplete categories. | "To the best of our knowledge, AMDEC explores a unified design combining region-aware sampling, similarity-based clustering, and base-delta storage for anonymous memory deduplication." |
-| **Linear $O(N)$ scaling** | **PARTIALLY SUPPORTED** | Scalability sweep shows linear growth in candidate indexing runtime up to N=20,000. | "Demonstrates sub-quadratic candidate indexing scaling across expanding memory datasets." |
+| Claim | Evidence | Status | Publication-Safe Wording |
+|:---|:---|:---:|:---|
+| **Adaptive delta threshold reduces unnecessary storage** | MinHash-LSH (Module 2) filters low-similarity pairs ($<0.70$) before Module 3. High-delta pages do not form clusters. | **NOT DEMONSTRATED** | "The 30% delta fallback serves as an architectural safety mechanism that prevents inefficient delta records when a delta exceeds the configured storage threshold." |
+| **M1 reduces unnecessary scanning** | M1 filters **7.1% of pages as HOT** from downstream LSH clustering, but M1 classification adds ~25ms overhead (32.77 ms vs 7.33 ms uniform scan). | **PARTIALLY SUPPORTED** | "M1 filters volatile pages from downstream similarity processing, at the cost of additional classification overhead." |
+| **LSH substantially reduces pair search** | Candidate pair reduction of **98.07% at N=1,000** to **99.859% at N=10,000** (70.5K vs 50M pairs), 4.4x measured speedup at N=2,500. | **SUPPORTED** | "MinHash-LSH achieves a 99.859% candidate-search-space reduction at N=10,000, demonstrating sub-quadratic candidate generation." |
+| **AMDEC achieves ~73.6% memory savings** | Across 10 multi-trial primary runs ($N=10,000$), mean logical savings is **73.60% ± 0.83%** (95% CI: [73.00%, 74.19%]), compression ratio **3.79x ± 0.12x**. | **SUPPORTED** | "AMDEC achieved 73.60% ± 0.83% logical memory savings on the evaluated synthetic anonymous-memory workload." |
+| **Reconstruction latency is low in simulation** | Mean simulated reconstruction latency is **1.75 ± 0.42 µs**. Pooled percentiles across 7,000 accesses: **P50 = 1.58 µs, P95 = 3.88 µs, P99 = 4.58 µs**. | **SUPPORTED** | "Mean simulated reconstruction latency was measured at 1.75 ± 0.42 µs (P95 = 3.88 µs)." |
+| **NumPy uint64 differencing acceleration** | Offline benchmark shows **198.0x ± 7.7x speedup** of NumPy uint64 vectorized differencing over scalar Python loops. | **SUPPORTED** | "Demonstrates a 198.0x ± 7.7x speedup of NumPy uint64 vectorized differencing over the scalar Python implementation, suggesting suitability for SIMD-oriented execution." |
+| **Novelty / First Claim** | Literature survey covers 18 systems across 3 incomplete categories. | **PARTIALLY SUPPORTED** | "To the best of our knowledge, AMDEC explores a unified design combining region-aware sampling, similarity-based clustering, and base-delta storage for anonymous memory deduplication." |
+| **Linear $O(N)$ scaling** | Scalability sweep shows sub-quadratic candidate indexing growth up to N=20,000. | **PARTIALLY SUPPORTED** | "Demonstrates sub-quadratic candidate indexing scaling across expanding memory datasets over the tested range." |
 
 ---
 
