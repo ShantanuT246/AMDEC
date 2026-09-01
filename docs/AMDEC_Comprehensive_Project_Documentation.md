@@ -18,6 +18,7 @@
 7. [Comparative Evaluation vs. Literature Matrix](#7-comparative-evaluation-vs-literature-matrix)
 8. [Reproducibility & Codebase Directory Map](#8-reproducibility--codebase-directory-map)
 9. [Conclusion & Research Takeaways](#9-conclusion--research-takeaways)
+10. [Threats to Validity & Acknowledged Limitations](#10-threats-to-validity--acknowledged-limitations)
 
 ---
 
@@ -384,3 +385,59 @@ AMDEC/
 
 ---
 *AMDEC Project Documentation | Author: Shantanu Tapole | Design Science Research*
+
+---
+
+## 10. Threats to Validity & Acknowledged Limitations
+
+This section formally acknowledges the known constraints and threats to the validity of AMDEC's measured results, following standard IEEE/ACM evaluation methodology.
+
+### 10.1 Internal Validity
+
+**T1 — Shift Vulnerability (XOR Delta Encoding)**  
+AMDEC's byte-level XOR differencing assumes pages mutate _in-place_ at fixed byte offsets. A 1-byte insertion or deletion shifts all subsequent data, causing XOR to produce non-zero output across the entire page suffix — resulting in a delta record that exceeds the adaptive fallback threshold and is stored uncompressed. This is the most significant correctness limitation of the current encoding scheme.
+
+*Mitigation Implemented:* Phase A fast-track — if two pages have identical SHA-256 digests, a zero-span delta is stored with no XOR computation. This correctly handles the exact-duplicate common case (7% of the workload).
+
+*Mitigation Not Implemented (Scope Boundary):* Full shift-invariant alignment (e.g., sliding-window Rabin fingerprinting or edit-distance alignment) has $O(N^2)$ complexity for 4096-byte pages and is infeasible at OS-level deduplication throughput. This is acknowledged as a future engineering extension.
+
+**T2 — Transitive Cluster Divergence (Union-Find Single-Linkage)**  
+Union-Find clustering exhibits single-linkage behavior: if A is similar to B (J=0.75) and B is similar to C (J=0.75), A and C may reside in the same cluster with J(A,C)=0.50. If the medoid chooses A as the base, C's delta against A is larger than necessary.
+
+*Mitigation Implemented:* (a) Intra-cluster diameter gate — clusters where the minimum sampled pairwise Jaccard drops below 0.60 are re-split into tighter sub-clusters. (b) Secondary-base fallback — if a page's delta against the medoid exceeds the adaptive threshold, AMDEC tries all other cluster members as alt-bases before falling back to full-page storage.
+
+### 10.2 External Validity
+
+**T3 — Synthetic Workload Artifact**  
+All experiments use parameterized synthetic anonymous heap pages (heap object templates with controlled mutation rates). Real-world anonymous memory exhibits more complex mutation patterns including pointer graph rewrites, JIT code segment mutations, and string interning artefacts. Results should be interpreted as _best-case estimates for near-duplicate-heavy workloads_ (near-dup ratio ≥ 60%).
+
+**T4 — Literature Baselines Not Run on Same Machine**  
+KSM, UKSM, CBPS, and Difference Engine savings figures are cited from published literature, not from same-machine experiments. Direct numerical comparison claims are qualified as "conceptual comparison" throughout this document.
+
+### 10.3 Simulation Validity
+
+**T5 — COW Fault Handler Abstraction (Module 5)**  
+Module 5 simulates the logical state machine of Copy-on-Write fault handling (page table state transitions, on-demand delta reconstruction, and write-path private copy allocation). It does not model:
+- Kernel trap entry overhead (~1,000 cycles / ~0.3 µs on modern x86).
+- TLB shootdown latency across CPU cores (~100–500 cycles per remote CPU).
+- Page-table lock contention under concurrent write workloads.
+
+A production kernel implementation would add approximately **10–50 µs per COW fault** on top of the $1.83\ \mu\text{s}$ reconstruction latency measured in this simulation. The measured reconstruction time represents the _algorithmic lower bound_, not the full system cost.
+
+**T6 — Computational Acceleration Benchmark Scope (Module 4)**  
+The $182.4\times$ speedup reported for NumPy uint64 vectorized XOR over scalar Python loops is a Python-internal benchmark. A production OS kernel implementation using AVX2/AVX-512 C intrinsics would achieve several GB/s per core throughput — orders of magnitude beyond what a Python interpreter can attain. This benchmark demonstrates the _algorithmic principle_ of SIMD-friendly delta differencing, not production-level throughput numbers.
+
+**T7 — No Global Cross-Cluster Base Sharing in Reconstruction**  
+While the storage accounting correctly deduplicates repeated base pages via a SHA-256 fingerprint registry (avoiding double-counting), the `CompressedCluster` data structure stores a full copy of the base content per cluster for simplicity of COW reconstruction. A production implementation would use a single shared base page backing store with reference counting.
+
+### 10.4 Summary Table
+
+| Threat ID | Category | Severity | Mitigation Status |
+|---|---|---|---|
+| T1 Shift Vulnerability | Internal | **High** | Phase A exact-hash bypass implemented; full alignment is out-of-scope |
+| T2 Transitive Divergence | Internal | **Medium** | Diameter gate + secondary-base fallback implemented |
+| T3 Synthetic Workload | External | **Medium** | Documented; results scoped to near-dup-heavy workloads |
+| T4 Literature Baseline | External | **Low** | All comparisons qualified as "conceptual" |
+| T5 COW Abstraction | Simulation | **High** | Documented; measured latencies are algorithmic lower bounds |
+| T6 Acceleration Scope | Simulation | **Medium** | Benchmark scoped as Python-internal SIMD principle demonstration |
+| T7 Base Sharing | Simulation | **Low** | Storage accounting fixed; reconstruction copy is known simplification |

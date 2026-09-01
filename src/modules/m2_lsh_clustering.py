@@ -177,8 +177,10 @@ class MinHashLSHClusteringEngine:
         # 1. Compute MinHash signatures for all input pages
         page_dict: Dict[int, Page] = {p.page_id: p for p in pages}
         page_minhashes: Dict[int, MinHash] = {}
+        page_content_map: Dict[int, bytearray] = {}
         for p in pages:
             page_minhashes[p.page_id] = self.compute_minhash(p.content)
+            page_content_map[p.page_id] = p.content
 
         # 2. Index pages into LSH Band Buckets: (band_idx, bucket_hash) -> List[page_id]
         lsh_tables: Dict[Tuple[int, int], List[int]] = defaultdict(list)
@@ -199,18 +201,50 @@ class MinHashLSHClusteringEngine:
                             p2 = bucket_pages[j]
                             candidate_pairs.add((min(p1, p2), max(p1, p2)))
                 else:
-                    # For very large buckets (e.g. identical templates), chain elements + sample
-                    # Chain consecutive pairs to ensure full connectivity in Union-Find
-                    for i in range(b_len - 1):
-                        p1 = bucket_pages[i]
-                        p2 = bucket_pages[i + 1]
-                        candidate_pairs.add((min(p1, p2), max(p1, p2)))
-                    # Add random cross-samples
-                    sample_k = min(b_len * 2, 500)
-                    for _ in range(sample_k):
-                        i, j = np.random.choice(b_len, size=2, replace=False)
-                        p1, p2 = bucket_pages[i], bucket_pages[j]
-                        candidate_pairs.add((min(p1, p2), max(p1, p2)))
+                    # Large-bucket strategy for massive uniform workloads (e.g. zero-pages)
+                    # Step 1: Group exact duplicates via SHA-256 content hash.
+                    # This guarantees exact-duplicate pages are always in the same
+                    # Union-Find component regardless of Jaccard threshold, preventing
+                    # artificial cluster fragmentation on a single failed verification link.
+                    import hashlib
+                    hash_groups: Dict[str, List[int]] = {}
+                    for pid in bucket_pages:
+                        page_content = page_content_map.get(pid)
+                        if page_content is not None:
+                            h = hashlib.sha256(bytes(page_content)).hexdigest()
+                        else:
+                            h = str(pid)
+                        hash_groups.setdefault(h, []).append(pid)
+
+                    # Step 2: Within each exact-hash group, chain consecutive pairs
+                    # (guaranteed J=1.0, never fails Jaccard verification)
+                    group_representatives: List[int] = []
+                    for group_ids in hash_groups.values():
+                        for i in range(len(group_ids) - 1):
+                            p1, p2 = group_ids[i], group_ids[i + 1]
+                            candidate_pairs.add((min(p1, p2), max(p1, p2)))
+                        group_representatives.append(group_ids[0])  # One rep per unique hash
+
+                    # Step 3: Chain representatives and cross-sample between them
+                    # Chaining guarantees spanning connectivity across the bucket
+                    n_reps = len(group_representatives)
+                    if n_reps > 1:
+                        for i in range(n_reps - 1):
+                            p1, p2 = group_representatives[i], group_representatives[i + 1]
+                            candidate_pairs.add((min(p1, p2), max(p1, p2)))
+
+                        if n_reps <= 64:
+                            for i in range(n_reps):
+                                for j in range(i + 1, n_reps):
+                                    p1, p2 = group_representatives[i], group_representatives[j]
+                                    candidate_pairs.add((min(p1, p2), max(p1, p2)))
+                        else:
+                            # Sample additional cross pairs across representatives
+                            sample_k = min(n_reps * 2, 500)
+                            for _ in range(sample_k):
+                                i, j = np.random.choice(n_reps, size=2, replace=False)
+                                p1, p2 = group_representatives[i], group_representatives[j]
+                                candidate_pairs.add((min(p1, p2), max(p1, p2)))
 
         # Theoretical brute-force comparisons
         total_possible_pairs = (n_pages * (n_pages - 1)) // 2
@@ -248,26 +282,28 @@ class MinHashLSHClusteringEngine:
             if m_len > 1:
                 # Multi-page similarity cluster
                 # Compute average intra-cluster similarity efficiently
-                intra_sims = []
+                intra_sims: List[float] = []
                 if m_len <= 16:
                     for i in range(m_len):
                         for j in range(i + 1, m_len):
                             p_a = min(member_ids[i], member_ids[j])
                             p_b = max(member_ids[i], member_ids[j])
-                            if (p_a, p_b) in pair_similarities:
-                                intra_sims.append(pair_similarities[(p_a, p_b)])
-                            else:
-                                intra_sims.append(page_minhashes[p_a].jaccard(page_minhashes[p_b]))
+                            sim = pair_similarities.get(
+                                (p_a, p_b),
+                                page_minhashes[p_a].jaccard(page_minhashes[p_b])
+                            )
+                            intra_sims.append(sim)
                 else:
                     # Sample up to 40 pairs for large clusters to bound runtime
                     for _ in range(40):
                         i, j = np.random.choice(m_len, size=2, replace=False)
                         p_a = min(member_ids[i], member_ids[j])
                         p_b = max(member_ids[i], member_ids[j])
-                        if (p_a, p_b) in pair_similarities:
-                            intra_sims.append(pair_similarities[(p_a, p_b)])
-                        else:
-                            intra_sims.append(page_minhashes[p_a].jaccard(page_minhashes[p_b]))
+                        sim = pair_similarities.get(
+                            (p_a, p_b),
+                            page_minhashes[p_a].jaccard(page_minhashes[p_b])
+                        )
+                        intra_sims.append(sim)
 
                 avg_sim = float(np.mean(intra_sims)) if intra_sims else 1.0
                 cluster = SimilarityCluster(

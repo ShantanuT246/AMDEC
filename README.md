@@ -1,386 +1,356 @@
-# AMDEC: Comprehensive Project Documentation & Technical Summary
-### Adaptive Memory Deduplication via Locality-Sensitive Similarity Clustering and Base-Delta Encoding
-
-> **Author / Principal Investigator:** Shantanu Tapole  
-> **Methodology:** Design Science Research (DSR)  
-> **Target Venue:** IEEE / ACM Systems Conference (e.g., IEEE COMPSAC, USENIX ATC Workshop Track)  
-> **Simulation Testbed:** Python 3.x userspace simulation (NumPy, datasketch, scipy, pandas, matplotlib, pytest)
+# AMDEC : Adaptive Memory Deduplication via Base-Delta Encoding and Locality-Sensitive Similarity Clustering
+**Comprehensive Systems & Research Analysis**
 
 ---
 
-## 📑 Table of Contents
-1. [Executive Summary & Core Hypothesis](#1-executive-summary--core-hypothesis)
-2. [Literature Survey & Gap Formalization](#2-literature-survey--gap-formalization)
-3. [System Architecture & 5-Module Pipeline](#3-system-architecture--5-module-pipeline)
-4. [Module-by-Module Technical Specification](#4-module-by-module-technical-specification)
-5. [Experimental Results & Benchmarks](#5-experimental-results--benchmarks)
-6. [Ablation Studies Analysis](#6-ablation-studies-analysis)
-7. [Comparative Evaluation vs. Literature Matrix](#7-comparative-evaluation-vs-literature-matrix)
-8. [Reproducibility & Codebase Directory Map](#8-reproducibility--codebase-directory-map)
-9. [Conclusion & Research Takeaways](#9-conclusion--research-takeaways)
+## 1. Executive Summary
+
+This project is essentially a **userspace simulation of a memory management system** that **uses Locality-Sensitive Hashing (LSH) and base-delta encoding** in order to **identify and compress near-duplicate memory pages that traditional exact-match deduplication would miss.**
+
+AMDEC (***A**daptive **M**emory **D**eduplication via Base-Delta **E**ncoding and Locality-Sensitive Similarity **C**lustering*) bridges the gap between traditional deduplication (like Linux KSM) and complex delta-compression (like Difference Engine). Instead of doing an $O(N^2)$ pairwise comparison to find similar pages, it uses MinHash and LSH to rapidly bucket similar pages in $O(N)$ time. It then compresses these clusters by picking a representative "base" page and storing the others as XOR-diff deltas. An adaptive sampling mechanism (M1) dynamically avoids scanning highly volatile pages, and simulated Copy-on-Write (M5) handles page reconstruction upon write faults.
 
 ---
 
-## 1. Executive Summary & Core Hypothesis
+## 2. Problem Definition
 
-### 1.1 The Core Problem
-Modern operating systems, cloud hypervisors, and container runtimes waste substantial physical memory hosting redundant page contents. Standard deduplication engines (such as **Linux Kernel Samepage Merging / KSM** and **VMware Content-Based Page Sharing / CBPS**) operate under a **binary exactness constraint**: two 4096-byte memory pages can only be merged if they are **100% byte-for-byte identical**.
+**Memory deduplication** seeks to reduce the physical memory footprint of a system by finding identical pages and sharing them across processes (typically mapping virtual pages to a single physical frame via read-only mappings).
+**Exact deduplication limitations:** Systems like Linux KSM hash the page content. If `Page A` and `Page B` differ by even a single byte (e.g., a changed timestamp or pointer), their hashes diverge, and they cannot be deduplicated. 
+**Similar-but-not-identical pages:** In real workloads (VMs, containers, heaps), pages are often highly similar but not identical due to structural headers, timestamps, or minor state differences. 
+**Problem:** How can we deduplicate these near-duplicate pages with low CPU overhead, avoiding the $O(N^2)$ trap of comparing every page against every other page?
 
-However, empirical systems research reveals that in **anonymous memory heaps** (dynamic allocations in web servers, databases, microservices, and language runtimes):
-- Less than **$7\%$ of pages are exact duplicates**.
-- Up to **$86\%$ of pages are near-duplicates** (sharing identical structural templates, object vtables, or text formats, but differing only in timestamps, counters, or pointer offsets).
+---
 
-Consequently, exact-match deduplicators discard over **$80\%$ of potential memory reduction opportunities**.
+## 3. Research Motivation
 
-### 1.2 The AMDEC Solution
-**AMDEC** introduces a unified, 4-stage algorithmic pipeline designed to safely capture near-duplicate anonymous memory pages without excessive CPU overhead or high retrieval latency:
+**Motivation:** Memory is a primary bottleneck in high-density cloud environments. Saving memory directly translates to running more VMs/containers per physical node.
+**Research Gap:** Existing systems fall into two extremes. Linux KSM is fast but only catches 100% exact matches. Difference Engine catches partial matches using `bsdiff` but suffers from unguided $O(N^2)$ search overhead, causing high CPU spikes. SiLo uses LSH, but is built for offline backup storage, not live RAM.
+**Proposed Idea:** Use a streaming MinHash-based LSH pipeline to cluster near-duplicates in near-linear time, compress them using XOR base-delta encoding, and wrap it all in an adaptive tiering system that avoids hashing highly volatile "hot" pages.
+**Hypothesis:** AMDEC hypothesizes that combining LSH-based candidate search with adaptive volatility filtering can achieve the memory savings of delta-compression (70%+) with the low CPU overhead of exact-match scanning (<5%).
 
+---
+
+## 4. Memory Deduplication
+
+### Traditional Exact Deduplication
+```text
+Page A (101010...)  → Hash(A) = 0x123
+Page B (101010...)  → Hash(B) = 0x123
 ```
-[Anonymous Memory Pages]
-           │
-           ▼
-[Module 1: Sampling & Feedback Engine] ──► Classifies pages into HOT/WARM/COLD; skips volatile churn
-           │ Candidate Pages (COLD / WARM)
-           ▼
-[Module 2: MinHash-LSH Clustering] ────► 128B chunking, K=32 MinHash, b=8 LSH bands, Union-Find
-           │ Similarity Clusters (J >= 0.70)
-           ▼
-[Module 3: Base-Delta Storage] ────────► Medoid selection, XOR+RLE diffs, metadata-aware delta storage
-           │
-           ▼
-[Module 5: Simulated COW Handler] ─────► Sub-5 µs on-demand reconstruction & dynamic feedback quarantine
+If Hash(A) == Hash(B), we perform a `memcmp`. If identical, we free B's physical frame and point B's virtual address to A's physical frame, marking it Read-Only (Copy-on-Write).
+
+### The "Near-Duplicate" Failure
+```text
+Page A: [ Header | Timestamp: 10:00 | Data ]
+Page B: [ Header | Timestamp: 10:01 | Data ]
 ```
-
-### 1.3 Central Research Hypothesis
-> **Hypothesis:** When anonymous memory contains high proportions of near-duplicate pages, locality-sensitive similarity clustering combined with base-delta representation achieves substantial logical memory reduction ($>70\%$) beyond exact-match deduplicators, while region-aware stability sampling prevents useless CPU scanning and bounded reconstruction latencies ($<5\ \mu\text{s}$) preserve runtime safety.
-
----
-
-## 2. Literature Survey & Gap Formalization
-
-### 2.1 Complete Literature Matrix (18 Prior Works Analyzed)
-
-| System / Paper | Year | Target Domain | Technique | Reported Savings | Exact Only? | Near-Dup? | Base-Delta? | Region-Aware? | Primary Architectural Limitation |
-|---|---|---|---|---|---|---|---|---|---|
-| **VMware CBPS** | 2002 | Hypervisor VMs | Periodic hash scan | Up to 60% (homogeneous) | ✅ | ❌ | ❌ | ❌ | Exact-match only; static binary sharing |
-| **Linux KSM** | 2009 | Linux Kernel | Red-black tree scan | ~20–30% (workloads) | ✅ | ❌ | ❌ | ❌ | 1-byte difference blocks merge entirely |
-| **Satori** | 2009 | Xen / Disk I/O | Load-time enlightened sharing | Exploits up to 94% max sharing | ✅ | ❌ | ❌ | ❌ | Restricted to disk-backed pages at I/O read time |
-| **Difference Engine** | 2008 | Xen Hypervisor | Sub-page delta + compression | 40–60% footprint reduction | ❌ | ✅ | ✅ | ❌ | **Unguided $O(N^2)$ pairwise delta search** |
-| **Page Overlays** | 2013 | HW-Assisted Cache | Fine-grained page merging | 15–35% footprint reduction | ❌ | ✅ | Partial | ❌ | Requires custom CPU hardware; no clustering |
-| **BCD Deduplication** | 2017 | OS Sub-page | Byte-level content differencing | 20–40% sub-page reduction | ❌ | ✅ | ✅ | ❌ | No upstream clustering stage; high pairwise cost |
-| **Sparrow** | 2024 | Android OS | Intra-page block sampling | Identifies 86.1% near-dup potential | ❌ | ✅ | Partial | ❌ | Demonstrates the problem; no general clustering framework |
-| **De2Dup / dbDedup** | 2024 | In-Memory DBs | Intel DSA hardware delta | 30–50% reduction in DB heaps | ❌ | ✅ | ✅ | ❌ | Domain-specific to columnar DBs; requires Intel DSA |
-| **UKSM** | 2018 | Linux Kernel | Hierarchical distilling | Up to 5x over CBPS | ✅ | ❌ | ❌ | ✅ | Region-awareness applied to **exact-match only** |
-| **CKSM** | 2024 | Linux Containers | Physical-memory-space scan | 60–80% CPU scan reduction | ✅ | ❌ | ❌ | ✅ | Still fundamentally exact-match only |
-| **PAMD** | 2024 | Dynamic Control | Process-aware loop joining | Workload-dependent ROI | ✅ | ❌ | ❌ | Partial | Process-level tuning; blind to content similarity |
-| **SiLo** | 2011 | Backup Storage | Similarity + locality clustering | ~90% storage reduction | ❌ | ✅ | ❌ | ❌ | Storage/backup dedup; not live RAM |
-| **I/O Deduplication** | 2010 | Storage Caching | Content-based disk caching | 28–47% I/O reduction | ❌ | ✅ | ❌ | ❌ | Block I/O domain; not OS virtual memory |
-| **TSM / CISWH** | 2024 | Edge File Storage | Threshold similarity hashing | 43.2% edge storage reduction | ❌ | ✅ | ❌ | ❌ | Applied to files; no COW memory recovery |
-| **Hardware DSA Engines**| 2024 | Accelerator Silicon | Hardware DMA offloaded diff | Offloads CPU during diff | ❌ | ✅ | ✅ | ❌ | Hardware-dependent; isolated to DB engines |
-| **Garg et al.** | 2020 | GPU Computing | GPU-parallel similarity scan | 5x–10x matching speedup | ❌ | ✅ | ❌ | ❌ | Requires GPU; no base-delta storage pipeline |
-| **CMDP** | 2022 | Cloud Hypervisors | Banked memory domain isolation | 25–35% search reduction | ✅ | ❌ | ❌ | ✅ | Domain partitioning; exact-match only |
-| **ORC** | 2023 | CHERI Architecture | Capability object sharing | Lowers hypervisor tail-latency | ✅ | ❌ | ❌ | ❌ | Requires CHERI hardware; exact sharing only |
-| **AMDEC (Ours)** | **2026** | **Anonymous Heaps** | **Sampling + LSH + Base-Delta** | **74.33% logical savings** | ❌ | ✅ | ✅ | ✅ | **First unified pipeline combining all 4 attributes** |
-
-### 2.2 The Identified Research Gap
-Across the literature, every existing system falls into one of three incomplete quadrants:
-1. **Exact-Match Systems (KSM, UKSM, CKSM, CBPS):** Low retrieval latency, but misses up to $86\%$ of near-duplicates in anonymous memory.
-2. **Sub-Page Delta Systems (Difference Engine, BCD):** Capable of delta storage, but lacks upstream clustering $\implies$ suffers from an intractable $O(N^2)$ unguided pairwise comparison bottleneck.
-3. **Similarity Storage Systems (SiLo, TSM):** Uses LSH for clustering, but restricted to high-latency offline disk/backup storage without low-latency COW memory recovery.
-
-**AMDEC is the first system to bridge this gap**, delivering Region-Aware Stability Filtering + Sub-Quadratic MinHash-LSH Clustering + Metadata-Aware Base-Delta Storage + Sub-$5\ \mu\text{s}$ COW Reconstruction.
+These pages are 99% identical, but their SHA-256 hashes are 100% different. Exact deduplication completely ignores them. 
+AMDEC fixes this by finding **Similar Pages** (high Jaccard similarity of chunks) rather than requiring **Exact Duplicates**.
 
 ---
 
-## 3. System Architecture & 5-Module Pipeline
+## 5. Architecture
 
+The system is cleanly separated into 5 modules:
+
+1. **M1 (Sampling Engine):** Categorizes pages into HOT, WARM, COLD based on write frequency and age. Skips scanning HOT pages.
+2. **M2 (LSH Clustering):** Chunks pages into 128B blocks, computes MinHash signatures, indexes into LSH bands, extracts candidate pairs, verifies Jaccard similarity, and forms Connected Component clusters via Union-Find.
+3. **M3 (Base-Delta Storage):** Selects a base page (Medoid) for each cluster. Computes XOR diffs for other pages. Run-Length Encodes (RLE) the differences into Delta Records.
+4. **M4 (Acceleration):** Uses NumPy SIMD vectorization to compute uint64 XOR diffs rapidly.
+5. **M5 (Simulated COW):** Simulates the Page Table. Handles reads (reconstructing deltas) and write faults (Copy-on-Write breaking, allocating private pages, sending feedback to M1).
+
+---
+
+## 6. Core Algorithm
+
+### Stage A: Page Generation (Synthetic)
+Pages are 4096 bytes. The `SyntheticWorkloadGenerator` creates 10,000 pages with an 80% near-duplicate, 7% exact duplicate, and 13% unique ratio. Near-duplicates are created by generating a "template" (e.g., struct array) and randomly mutating 1 to 6 8-byte words (pointers/timestamps). Write traffic is simulated using a Zipfian distribution.
+
+### Stage B: Adaptive Sampling (M1)
+Pages are placed in a Min-Heap prioritized by a `priority_score`.
+*   **HOT Pages:** Write rate > 0.08 writes/sec. Skipped entirely (saves CPU).
+*   **COLD Pages:** Write rate < 0.01, idle > 5.0s, age > 10.0s. High priority for scanning.
+*   **WARM Pages:** In between. Medium priority.
+**Trade-off:** Scanning hot pages wastes CPU because they will quickly mutate and break their Copy-on-Write sharing, incurring reconstruction latency and allocation overhead.
+
+---
+
+## 7. LSH Analysis
+
+Instead of pairwise $O(N^2)$ comparisons, M2 uses Locality-Sensitive Hashing:
+1.  **Chunks:** Page is split into thirty-two 128B chunks.
+2.  **MinHash:** 32 permutation hashes generated.
+3.  **LSH Bands:** The 32 hashes are split into $b=8$ bands of $r=4$ hashes each.
+4.  **Buckets:** Each band is hashed to a 64-bit integer bucket.
+5.  **Candidates:** If two pages collide in *any* of the 8 bands, they become candidate pairs.
+**Complexity:** LSH bucket assignment is $O(N)$. Checking candidate pairs is $O(C)$ where $C \ll N^2$. This changes the similarity search from quadratic to near-linear.
+
+---
+
+## 8. Similarity Metric
+
+The project uses **Jaccard Similarity** of MinHash signatures, with a default threshold of **0.70**.
+$Jaccard(A, B) = \frac{|A \cap B|}{|A \cup B|}$
+This is verified on the MinHash signature, *not* the raw bytes, saving massive I/O.
+Threshold matters: Too low = false positives (pages merged that aren't very similar, resulting in massive delta sizes that take up more space than the page itself). Too high = false negatives (missed deduplication opportunities).
+
+---
+
+## 9. Clustering
+
+Candidate pairs that pass the Jaccard threshold $\ge 0.70$ are merged using a **Union-Find (Disjoint Set)** algorithm with path compression and union-by-rank.
+```text
+Pair(A, B) > 0.70  -> Union(A, B)
+Pair(B, C) > 0.70  -> Union(B, C)
+Resulting Cluster: [A, B, C]
 ```
-                    ┌──────────────────────────────────────────────┐
-                    │   Synthetic Anonymous Memory Workload        │
-                    │   • 80% Near-Duplicate (templates + drift)   │
-                    │   • 7% Exact Duplicate (identical clones)    │
-                    │   • 13% Unique (high-entropy pages)          │
-                    │   • Zipf-distributed write traffic skew      │
-                    └──────────────────────┬───────────────────────┘
-                                           │ List[Page] (N = 10,000)
-                    ┌──────────────────────▼───────────────────────┐
-                    │ MODULE 1: Region-Aware Sampling & Feedback   │
-                    │ • Computes age, write-rate, idle-time        │
-                    │ • HOT (skip) / WARM (low) / COLD (high)      │
-                    │ • Dynamic quarantine on COW break feedback   │
-                    └──────────────────────┬───────────────────────┘
-                                           │ Candidate Pages (92.4% passed)
-                    ┌──────────────────────▼───────────────────────┐
-                    │ MODULE 2: MinHash + LSH Clustering Engine    │
-                    │ • 128B positional sub-block chunking (32/page)│
-                    │ • MinHash signature generation (K=32)        │
-                    │ • LSH Banding (b=8, r=4)                     │
-                    │ • Jaccard verification (J >= 0.70)           │
-                    │ • Union-Find cluster assembly                │
-                    └──────────────────────┬───────────────────────┘
-                                           │ Similarity Clusters
-                    ┌──────────────────────▼───────────────────────┐
-                    │ MODULE 3: Base-Delta Storage Manager         │
-                    │ • Medoid representative base selection       │
-                    │ • NumPy vectorized XOR differencing          │
-                    │ • Run-Length Encoding (RLE) of non-zero spans│
-                    │ • Adaptive fallback thresholding (delta<=30%)│
-                    │ • Metadata-aware storage accounting          │
-                    └──────────────────────┬───────────────────────┘
-                                           │
-                    ┌──────────────────────▼───────────────────────┐
-                    │ MODULE 4: Computational Acceleration         │
-                    │ • Scalar Python vs NumPy SIMD uint64 diff    │
-                    │ • 182x speedup / 3,173 MB/s throughput       │
-                    └──────────────────────┬───────────────────────┘
-                                           │
-                    ┌──────────────────────▼───────────────────────┐
-                    │ MODULE 5: Simulated COW Fault Handler        │
-                    │ • Page Table State: FULL / BASE / DELTA      │
-                    │ • Transparent read reconstruction (100%)     │
-                    │ • Write fault interception & private alloc   │
-                    │ • Microsecond latency profiling (P95/P99)    │
-                    └──────────────────────┬───────────────────────┘
-                                           │
-                                           ▼
-                     Raw Timestamped CSVs (`results/raw/`)
-                                           │
-                                           ▼
-                    300-DPI Publication Charts (`results/figures/`)
+Note an architectural side-effect: Union-Find creates transitive clusters. $A$ is similar to $B$, and $B$ to $C$, so they are in the same cluster, even if $A$ and $C$ are not similar ($J(A,C) < 0.70$).
+
+---
+
+## 10. Adaptivity — Most Important Part
+
+AMDEC relies on two primary dynamic adaptive mechanisms:
+
+1.  **Dynamic Sampling Feedback (M1 & M5):** When a clustered page receives a write, M5 triggers a COW fault. It sends feedback to M1 (`record_cow_fault_feedback`). M1 places the page in a temporary quarantine and permanently increases its "volatility penalty." This dynamically adapts the system to stop deduplicating pages that frequently break COW.
+2.  **Storage Fallback (M3):** If a generated delta exceeds the `max_delta_ratio` (30% of PAGE_SIZE, or 1228 bytes), the system *adaptively abandons* delta compression for that specific page and stores it as an unmerged full page. This prevents "negative compression" where metadata + massive deltas take up more space than the original page.
+
+---
+
+## 11. Base-Delta Encoding
+
+M3 selects the **Base Page** using the `medoid` strategy. For small clusters ($\le 16$), it computes exact pairwise byte distances and picks the page with the lowest sum of distances to all other cluster members.
+Deltas are computed using **XOR Differencing**, which is vectorized (M4).
+The XOR diff is compressed using **Run-Length Encoding (RLE)** of non-zero spans.
+Metadata is properly accounted for: `4B base_ref + 2B span_count + (4B header + data) per span`.
+
+---
+
+## 12. Copy-on-Write / Reconstruction
+
+Simulated in M5.
+```text
+Write to DELTA_PAGE(ID: 5)
+  ↓
+COW Fault Triggered
+  ↓
+Fetch BASE_PAGE
+  ↓
+XOR Reconstruct BASE + DELTA(5)
+  ↓
+Allocate new FULL_PAGE for ID 5
+  ↓
+Apply Write Data
+  ↓
+Notify M1 (Feedback penalty)
 ```
+The state machine properly tracks `FULL_PAGE`, `BASE_PAGE`, and `DELTA_PAGE`.
 
 ---
 
-## 4. Module-by-Module Technical Specification
+## 13. Data Structures
 
-### 4.1 Workload Generator (`src/workload/page_generator.py`)
-- **Page Model:** 4096-byte page with `page_id`, `region_id`, `alloc_time`, `last_write_time`, `write_count`, and `cow_fault_count`.
-- **Composition:**
-  - *Near-Duplicates ($80\%$):* Base templates (heap object structs, pointer tables, JSON string buffers) with subtle mutations ($0.2\% - 1.2\%$ word divergence on pointers/counters).
-  - *Exact Duplicates ($7\%$):* Cloned identical pages.
-  - *Unique Pages ($13\%$):* High-entropy pseudo-random bytes.
-- **Write Skew:** Zipfian distribution ($P(r) \propto 1/r^\alpha, \alpha=1.3$) simulating realistic heap behavior where $\sim 2\%$ hot pages absorb the vast majority of memory writes.
-
-### 4.2 Module 1: Region-Aware Sampling & Feedback (`src/modules/m1_sampling.py`)
-- **Mathematical Scoring:**
-  $$\text{age} = \max(1.0, t_{\text{current}} - t_{\text{alloc}}), \quad \text{idle\_time} = \max(0.0, t_{\text{current}} - t_{\text{last\_write}})$$
-  $$\text{effective\_writes} = \text{write\_count} + (\text{cow\_faults} \times 2.5)$$
-  $$\text{write\_rate} = \frac{\text{effective\_writes}}{\text{age}}$$
-- **Tier Classification:**
-  - **`HOT`:** $\text{write\_rate} \ge 0.06\text{ writes/sec}$ or under active quarantine $\implies$ **Skipped immediately** (saves CPU and prevents immediate COW break).
-  - **`WARM`:** Moderate activity or $\text{age} < 10.0\text{s} \implies$ Enqueued at low priority.
-  - **`COLD`:** $\text{write\_rate} \le 0.005\text{ writes/sec}$, $\text{age} \ge 10.0\text{s}$, $\text{idle\_time} > 5.0\text{s} \implies$ Enqueued at **highest priority**.
-- **Dynamic Quarantine:** A page suffering a COW write fault is quarantined for $\Delta t = 30.0\text{s}$, preventing thrashing.
-
-### 4.3 Module 2: MinHash-LSH Clustering Engine (`src/modules/m2_lsh_clustering.py`)
-- **Positional Chunking:** Page sliced into $32 \times 128\text{B}$ sub-blocks, prefixed with 2-byte chunk offset index.
-- **MinHash Fingerprinting:** $K = 32$ permutation hashes computed across positional sub-blocks.
-- **LSH Banding:** Partitioned into $b = 8$ bands of $r = 4$ rows ($K = b \cdot r$). Hash collision in any band identifies candidate pairs.
-- **Complexity Advantage:** Reduces search space from $O(N^2)$ to $O(N)$ expected bucket lookups.
-- **Verification & Union-Find:** Pairs meeting $J \ge 0.70$ are verified and merged using a disjoint-set data structure with path compression and rank optimization.
-
-### 4.4 Module 3: Base-Delta Storage Manager (`src/modules/m3_delta_storage.py`)
-- **Medoid Selection:** Computes pairwise byte distances across cluster members; picks base page minimizing $\sum_{p \in C} \text{dist}(\text{base}, p)$.
-- **Vectorized XOR Diff + RLE Spans:** Non-zero byte runs encoded as $[(\text{offset}: \text{uint16}, \text{length}: \text{uint16}, \text{data}: \text{bytes})]$.
-- **Strict Metadata-Aware Accounting:**
-  $$\text{Delta Record Size} = 4\text{B (Base Ref)} + 2\text{B (Span Count)} + \sum (4\text{B} + \text{len}(\text{span data}))$$
-- **Adaptive Thresholding:**
-  $$\text{if } \text{Size}(\text{Delta Record}) > 0.30 \times 4096\text{B} (1228\text{B}) \implies \text{Store as full unmerged page}$$
-
-### 4.5 Module 4: Computational Acceleration Benchmark (`src/modules/m4_acceleration.py`)
-- Compares pure Python scalar byte loops vs. **NumPy uint64 bitwise XOR** differencing.
-- Processes 8 bytes per CPU instruction, achieving **$182.4\times$ speedup** ($3,173\text{ MB/s}$ throughput).
-
-### 4.6 Module 5: Simulated COW Fault Handler (`src/modules/m5_cow.py`)
-- **Page Table States:** `FULL_PAGE` (uncompressed), `BASE_PAGE` (shared read-only base), `DELTA_PAGE` (compressed delta).
-- **Read Path:** Reconstructs $\hat{P} = P_{\text{base}} \oplus \text{Apply}(\text{Delta})$ with $100\%$ byte fidelity.
-- **COW Write Path:** Intercepts write $\implies$ reconstructs original content, allocates private `FULL_PAGE`, applies write payload, updates page table, and notifies Module 1 feedback engine.
+| Data Structure | Purpose | Why Used | Complexity |
+| :--- | :--- | :--- | :--- |
+| **Min-Heap** | M1 Page Prioritization | Fast extraction of COLD pages | $O(\log N)$ push/pop |
+| **Dict[Tuple, List]** | LSH Buckets | Fast collision mapping | $O(1)$ lookup |
+| **Union-Find** | M2 Clustering | Fast connected components | $O(\alpha(N))$ operations |
+| **NumPy Array** | M3/M4 XOR Diffs | SIMD vectorization throughput | $O(N/8)$ 64-bit ops |
 
 ---
 
-## 5. Experimental Results & Benchmarks
+## 14. Complete Data Flow
 
-### 5.1 Primary Full-Pipeline Results ($N = 10,000$ Pages / $39.06\text{ MB}$)
-
-| Metric | Measured Result | Significance |
-|---|---|---|
-| **Baseline Uncompressed Memory** | $39.06\text{ MB}$ ($10,000$ pages) | Raw unshared allocation |
-| **AMDEC Compressed Memory** | **$10.03\text{ MB}$** | Base pages + deltas + metadata |
-| **Logical Memory Savings** | **$74.33\%$** | **$3.90\times$ effective compression** |
-| **M1 Volatile Pages Skipped** | $801\text{ pages}$ ($8.0\%$) | Saves scan cycles on hot working set |
-| **M2 Search Space Reduction** | **$99.843\%$** | Evaluated 56K pairs vs 42.7M brute-force |
-| **Similarity Clusters Formed** | $150\text{ clusters}$ | Grouping $7,627$ near-duplicate pages |
-| **Mean Delta Storage Footprint** | **$24.2\text{ bytes / page}$** | Including all record headers & offset metadata |
-| **Mean Reconstruction Latency** | **$1.83\ \mu\text{s}$** | Extremely low retrieval penalty |
-| **95th Percentile (P95) Latency** | **$3.79\ \mu\text{s}$** | Bounded tail latency ($<5\ \mu\text{s}$) |
-| **99th Percentile (P99) Latency** | **$4.33\ \mu\text{s}$** | Bounded tail latency |
-| **M4 Acceleration Speedup** | **$182.38\times$** ($3,173\text{ MB/s}$) | Highly efficient vector differencing |
-| **Total Simulation Throughput** | $2,319\text{ pages/second}$ | Fast end-to-end Python pipeline |
+1. **Page (4096B)** evaluated by M1. If HOT, skip. Else, push to Heap.
+2. M1 pops highest priority (COLD) pages.
+3. M2 splits page into 32x 128B chunks. Pre-pends offset index.
+4. M2 computes 32-perm MinHash.
+5. M2 slices MinHash into 8 bands. Hashes bands to buckets.
+6. M2 extracts bucket collisions as Candidate Pairs.
+7. M2 checks MinHash Jaccard > 0.70.
+8. M2 merges passing pairs via Union-Find.
+9. M3 takes Cluster. Selects Medoid base page.
+10. M3 XORs other pages against base, encodes non-zero RLE spans.
+11. M5 stores Base as read-only, Deltas as read-only.
+12. Write occurs -> M5 Reconstructs, breaks COW, notifies M1.
 
 ---
 
-### 5.2 Multi-Dimensional Parameter Sweeps
+## 15. Complexity Analysis
 
-#### A. Mutation Rate Sensitivity Sweep ($0.1\% \to 30\%$ Byte Drift)
-Demonstrates AMDEC's operational boundary: as pages diverge from identical templates, memory savings degrade smoothly rather than crashing abruptly.
+| Component | Time | Space |
+| :--- | :--- | :--- |
+| **M1 Sampling** | $O(N \log N)$ | $O(N)$ for heap |
+| **M2 Minhash** | $O(N \times B)$ where $B=32$ blocks | $O(N \times K)$ hashes |
+| **M2 LSH Bucket** | $O(N)$ | $O(N)$ buckets |
+| **M2 Jaccard + UF** | $O(C \times \alpha(N))$ ($C$ = candidates) | $O(N)$ parents |
+| **M3 Medoid** | $O(S^2)$ ($S$ = cluster size) | $O(S)$ distances |
+| **M3 Delta XOR** | $O(S \times P)$ ($P$ = page size) | $O(P)$ buffers |
+| **M5 Reconstruct** | $O(D)$ ($D$ = delta spans) | $O(P)$ output buffer |
 
-| Mutation Rate | Word Mutations | Logical Memory Savings | Compression Ratio | Mean Delta Size | Operational Status |
-|---|---|---|---|---|---|
-| **0.1%** | 1 word (8B) | **78.4%** | $4.63\times$ | $18.2\text{ B}$ | Optimal sharing |
-| **0.5%** | 2–3 words (24B) | **74.8%** | $3.97\times$ | $24.0\text{ B}$ | Typical heap object drift |
-| **1.0%** | 5 words (40B) | **71.2%** | $3.47\times$ | $38.4\text{ B}$ | High sharing |
-| **2.0%** | 10 words (80B) | **64.5%** | $2.82\times$ | $68.1\text{ B}$ | Moderate sharing |
-| **5.0%** | 25 words (200B)| **53.1%** | $2.13\times$ | $154.2\text{ B}$ | Viable sharing |
-| **10.0%** | 51 words (408B)| **41.8%** | $1.72\times$ | $312.0\text{ B}$ | Selective delta sharing |
-| **20.0%** | 102 words (816B)| **36.2%** | $1.57\times$ | $580.4\text{ B}$ | Approaching fallback boundary |
-| **30.0%** | 153 words (1224B)| **34.8%** | $1.53\times$ | $892.1\text{ B}$ | Adaptive fallback active |
-
-#### B. Similarity Composition Sweep ($20\% \to 80\%$ Near-Duplicates)
-
-| Near-Duplicate Ratio | Unique Page Ratio | Logical Memory Savings | Compression Ratio |
-|---|---|---|---|
-| **20%** | 73% | **18.4%** | $1.23\times$ |
-| **40%** | 53% | **36.9%** | $1.58\times$ |
-| **60%** | 33% | **55.4%** | $2.24\times$ |
-| **80%** | 13% | **74.8%** | $3.97\times$ |
-
-*Takeaway:* Memory savings scale strictly linearly with the proportion of near-duplicates present in anonymous memory.
+*Overall Time:* Dominated by MinHash generation $O(N)$ and Medoid selection $O(S^2)$. Since $S \ll N$, overall system is practically $O(N)$, massively outperforming $O(N^2)$ brute force.
 
 ---
 
-## 6. Ablation Studies Analysis
+## 16. Adaptive vs Static Comparison
 
-To prove that every architectural module earns its place in the AMDEC system, three formal ablation studies were executed:
-
-### 6.1 Ablation Study 1: Module 1 Sampling Efficacy (`experiments/ablation_m1.py`)
-- **Comparison:** AMDEC with M1 Enabled vs. AMDEC with M1 Disabled (Uniform Full Scan).
-- **Results:**
-  - M1 filtered **$801$ volatile hot pages** ($8.0\%$).
-  - M2 clustering time dropped from $3,180\text{ ms} \to 2,690\text{ ms}$ (**$490\text{ ms}$ / $15.4\%$ time saved**).
-  - Prevented $801$ useless deduplication attempts that would have immediately broken COW upon the next write tick.
-
-### 6.2 Ablation Study 2: Adaptive vs. Fixed Delta Thresholding (`experiments/ablation_delta.py`)
-- **Comparison:** Adaptive Fallback ($\delta_{\text{max}} = 0.25$) vs. Fixed/No Fallback ($\delta_{\text{max}} = 1.0$).
-- **Results:**
-  - Under heavy mutation, Fixed delta storage suffered metadata bloat ($>1,400\text{ bytes/delta}$).
-  - Adaptive fallback kept bloated pages unmerged, reducing compressed memory footprint by **$8.4\%$** and capping tail delta sizes.
-
-### 6.3 Ablation Study 3: MinHash-LSH vs. Brute-Force All-Pairs (`experiments/ablation_lsh.py`)
-- **Comparison:** MinHash-LSH candidate indexing ($O(N)$ expected) vs. Brute-Force exhaustive all-pairs search ($O(N^2)$).
-- **Results (on $N = 1,500$ pages):**
-  - Brute-force required **$1,124,250$ pair comparisons** ($1,510\text{ ms}$).
-  - MinHash-LSH evaluated only **$18,778$ candidate pairs** ($462\text{ ms}$).
-  - **$98.33\%$ reduction in comparisons** and **$3.27\times$ speedup** while discovering the **exact same 27 clusters**.
+The project includes ablation scripts (`ablation_m1.py`, `ablation_lsh.py`, `ablation_delta.py`) which presumably disable the M1 filtering or M3 adaptive thresholding to prove their worth. The M3 logic explicitly checks `delta.total_storage_bytes > self.max_delta_bytes` and falls back to full storage, proving a static "always compress" baseline is avoided.
 
 ---
 
-## 7. Comparative Evaluation vs. Literature Matrix
+## 17. Experimental Methodology
 
-Here is how AMDEC directly compares with the most prominent published systems from our 18-paper literature survey:
-
-```
-┌────────────────────────────────────────────────────────────────────────────────────────┐
-│                                ARCHITECTURAL COMPARISON                                │
-├──────────────────────────┬──────────────┬───────────────┬──────────────────────────────┤
-│ System                   │ Reported     │ Strategy      │ How AMDEC Solves Limitation  │
-│                          │ Reduction    │               │                              │
-├──────────────────────────┼──────────────┼───────────────┼──────────────────────────────┤
-│ VMware CBPS (2002)       │ 20–60%       │ Exact SHA-1   │ CBPS misses near-duplicates; │
-│                          │              │               │ AMDEC captures +45% savings. │
-├──────────────────────────┼──────────────┼───────────────┼──────────────────────────────┤
-│ Linux KSM (2009)         │ 20–30%       │ Exact memcmp  │ 1-byte diff blocks KSM merge;│
-│                          │              │               │ AMDEC stores compact deltas. │
-├──────────────────────────┼──────────────┼───────────────┼──────────────────────────────┤
-│ UKSM (2018) / CKSM (2024)│ 25–35%       │ Region Distill│ Region-aware for exact only; │
-│                          │              │               │ AMDEC applies it to near-dup.│
-├──────────────────────────┼──────────────┼───────────────┼──────────────────────────────┤
-│ Difference Engine (2008) │ 40–60%       │ Pairwise diff │ Suffered O(N²) search cost;  │
-│                          │              │               │ AMDEC LSH cuts pairs 99.8%.  │
-├──────────────────────────┼──────────────┼───────────────┼──────────────────────────────┤
-│ SiLo (2011) / TSM (2024) │ ~43–90%      │ LSH on disk   │ SiLo is for offline backup;  │
-│                          │              │               │ AMDEC runs live in memory.   │
-├──────────────────────────┼──────────────┼───────────────┼──────────────────────────────┤
-│ AMDEC (This Work)        │ 74.33%       │ Sampling+LSH+ │ First unified pipeline       │
-│                          │              │ Base-Delta    │ targeting anonymous heaps.   │
-└──────────────────────────┴──────────────┴───────────────┴──────────────────────────────┘
-```
+*   **Dataset:** Synthetic generated memory pages.
+*   **Size:** 10,000 pages (40 MB).
+*   **Workload:** Zipfian (param 1.2/1.3) write distribution across 40 simulation ticks.
+*   **Ratios:** 80% near-dup, 7% exact, 13% unique.
+*   **Validity:** It is highly structured but synthetic. It proves algorithmic validity, but lacks real-world kernel validation.
 
 ---
 
-## 8. Reproducibility & Codebase Directory Map
+## 18. Metrics
 
-### 8.1 Execution Guide
+1. **Logical Memory Savings:** `(Baseline Bytes - AMDEC Bytes) / Baseline Bytes`
+2. **Compression Ratio:** `Baseline Bytes / AMDEC Bytes`
+3. **M1 Candidate Reduction:** `% of hot/volatile pages skipped.`
+4. **M2 Candidate Reduction:** Theoretical brute force pairs vs LSH pairs generated.
+5. **Mean Delta Footprint:** Average metadata-inclusive size of delta patches.
+6. **Reconstruction Latency (Mean, P95, P99):** Microseconds to apply XOR spans.
+7. **Throughput:** MB/s diffing speed (M4).
 
-```bash
-# 1. Activate Environment
-source .venv/bin/activate
+---
 
-# 2. Run All Automated Unit Tests (24/24 passing in ~0.6s)
-pytest tests/ -v
+## 19. Experimental Validity Audit
 
-# 3. Execute Single-Command Full End-to-End System Evaluation
-python experiments/run_full_eval.py 10000
+**Fair:**
+*   Accounts for Delta metadata overhead (offsets, lengths).
+*   Tracks exact reconstruction latency.
 
-# 4. Run Multi-Parameter Sweep (Sensitivity Curves)
-python experiments/parameter_sweep.py
+**Unfair / Leaks:**
+*   **Synthetic data fits the tool:** The generator creates near-duplicates by mutating 1-6 8-byte words. This perfectly plays into the 128B chunking and XOR differencing strategy. Real memory fragmentation may look very different (e.g., shifted offsets).
+*   **Offset alignment:** M2 prefixes chunks with positional offsets (`struct.pack("<H", idx)`). If a user inserts 1 byte at the start of a page, shifting all data down by 1 byte, XOR diffing will fail miserably (100% diff), even though the page is 99.9% identical. 
+*   Userspace timing (`time.perf_counter`) doesn't reflect actual kernel page-fault trap overhead.
 
-# 5. Run the 3 Ablation Studies
-python experiments/ablation_m1.py
-python experiments/ablation_delta.py
-python experiments/ablation_lsh.py
+---
 
-# 6. Generate 300-DPI Publication Figures & LaTeX Table
-python analysis/plot_results.py
-python analysis/compare_baselines.py
-```
+## 20. Result Analysis
 
-### 8.2 Codebase File Map
+As run by `run_full_eval.py`, the system expects to see **70-75% logical savings** on the synthetic workload.
+*   **Why?** Because 80% of pages are near-duplicates with < 50 bytes of difference. Base-Delta compresses 4096B into ~100B deltas.
+*   **LSH Performance:** Reduces pairwise combinations by 99%+, converting a problem that would take minutes to execute down to a few milliseconds.
+*   **Vectorization:** M4 NumPy XOR gives a massive speedup over scalar Python, minimizing the penalty of page reconstruction during COW faults.
+
+---
+
+## 21. Reproducibility
+**Score: 9/10**
+The project relies on standard Python libraries (`datasketch`, `numpy`). The `run_full_eval.py` script executes the pipeline end-to-end with hardcoded seeds (`seed=42`). A researcher cloning this repository will get exact deterministic results. The only missing element is a `requirements.txt` listing `datasketch` (though it exists, we must assume it is complete).
+
+---
+
+## 22. Bug and Correctness Audit
+
+*   **Severity:** High
+*   **Location:** `m2_lsh_clustering.py` : `cluster_pages` (Lines 201-213)
+*   **Problem:** To prevent $O(N^2)$ inside massive LSH buckets (e.g. 500 identical pages), the code samples pairs (`np.random.choice`) and chains consecutive elements.
+*   **Trigger:** Highly uniform workloads (e.g., zero-pages).
+*   **Why it happens:** Chaining `[0,1,2,3...]` ensures a single connected component, but Jaccard verification might fail on a single link, splitting a massive cluster artificially.
+*   **Impact:** Lower deduplication efficiency for massive identical blocks.
+*   **Fix:** For buckets > 64, do a quick exact hash check first to group exact duplicates into sub-clusters before randomized cross-sampling.
+
+---
+
+## 23. Research Claim Audit
+
+| Claim | Evidence | Supported? | Problem |
+| :--- | :--- | :--- | :--- |
+| M1 reduces CPU scanning overhead | Skipped pages bypass MinHash and LSH | Strongly | None |
+| LSH avoids $O(N^2)$ | Candidate pairs $\ll$ Possible pairs | Strongly | Bucket sampling shortcut |
+| Storage efficiency improved | `amdec_storage_bytes` calculations | Partially | Only proven on synthetic data, offset-shifts will break XOR diffs |
+
+---
+
+## 24. Novelty Audit
+
+*   **Existing:** KSM (Exact hashing), Difference Engine (XOR deltas), SiLo (LSH).
+*   **Novel Contribution:** The specific pipeline arrangement—using LSH to *guide* in-memory live base-delta encoding, coupled with the M1 volatility tiering (penalizing COW-breaking pages dynamically) is a novel synthesis of concepts for live hypervisor/OS memory management.
+
+---
+
+## 25. Architectural Weaknesses (Priority Fixes)
+
+1.  **Shift Vulnerability (The biggest weakness):** XOR differencing and position-aware block chunking fail completely if data is shifted by 1 byte (e.g. a string insertion). It requires data to mutate exactly in-place.
+2.  **Transitive Clustering:** Union-Find allows A-B-C clustering. If A is similar to B (0.75), and B is similar to C (0.75), A might be similar to C by only 0.50. Yet, if A is chosen as the Medoid base, C's delta against A will be massive.
+3.  **Simulation Gap:** Userspace Python arrays do not model kernel TLB shootdowns, page-table lock contention, or real hardware cache invalidation overheads during COW faults.
+4.  **No De-duplication of Base Pages:** Base pages aren't deduplicated globally if they end up similar across different clusters.
+
+---
+
+## 26. What is Good
+
+*   **Pipeline Architecture:** The separation of concerns (M1 through M5) is exceptional.
+*   **Medoid Selection:** Taking the time to select the *center* page of a cluster (rather than a random one) drastically minimizes the delta sizes for the whole cluster.
+*   **Storage Accounting:** The strict accounting for delta metadata overhead (headers, spans) shows deep systems maturity.
+
+---
+
+## 27. What is Trash / What is Weak
+
+*   **Simulated COW (M5):** It's just a Python dictionary lookup (`self.page_table[page_id]`). While it models the *logic* of COW, it completely abstracts away the actual pain of OS memory management (interrupts, trap overhead, lock contention).
+*   **NumPy Dependency for OS logic:** Using NumPy (M4) to simulate SIMD vectorized XOR is fine for a Python benchmark, but an OS kernel would use AVX2/AVX-512 intrinsic instructions in C. The "Acceleration" benchmark is a bit of a toy compared to kernel reality.
+
+---
+
+## 28. Interview / Viva Preparation
+
+**Basic**
+1. What is the fundamental difference between exact deduplication and AMDEC's approach?
+2. What is a COW fault?
+**Algorithm**
+3. Why does the system prefix chunks with positional indices before MinHashing?
+4. How does Union-Find create clusters from pairwise LSH candidate matches?
+5. Why is Medoid base selection better than picking the first page in a cluster?
+**System**
+6. What happens in M3 if a generated delta is 3000 bytes long?
+7. Explain the reconstruction process when a DELTA_PAGE is read.
+**Adaptive Mechanism**
+8. How does M1 define a HOT page, and why does it ignore them?
+9. Explain the M1-M5 feedback loop when a COW fault occurs.
+**Performance**
+10. Why is Locality Sensitive Hashing faster than Difference Engine's approach?
+*(Be prepared to defend the synthetic data generator and the lack of real kernel implementation).*
+
+---
+
+## 29. Explaining the Project
+
+*   **30-Second (Recruiter):** "I built a simulated memory management system that saves up to 75% of RAM by grouping similar memory pages together using advanced hashing, storing only their byte-level differences."
+*   **3-Minute (Professor):** "AMDEC tackles the $O(N^2)$ bottleneck in similarity-based memory deduplication. I implemented a pipeline that uses MinHash LSH to bucket near-duplicate pages in linear time. We then compress these clusters using medoid base-selection and XOR run-length encoded deltas. To prevent CPU thrashing, an adaptive tiering engine monitors write frequencies and COW faults to dynamically exclude volatile pages from the deduplication pool."
+
+---
+
+## 30. Final Knowledge Map
 
 ```text
-AMDEC/
-├── src/
-│   ├── workload/
-│   │   └── page_generator.py        # Synthetic anonymous heap generator & Zipf writes
-│   └── modules/
-│       ├── m1_sampling.py           # Module 1: Region-aware stability tiering & feedback
-│       ├── m2_lsh_clustering.py     # Module 2: MinHash + LSH clustering engine
-│       ├── m3_delta_storage.py      # Module 3: Medoid base selection & delta RLE storage
-│       ├── m4_acceleration.py       # Module 4: SIMD uint64 vectorized diff benchmark
-│       └── m5_cow.py                # Module 5: Simulated COW fault handler & page table
-├── tests/
-│   ├── test_page_generator.py       # Workload composition & Zipf tests
-│   ├── test_m1_sampling.py          # M1 stability tiering & feedback tests
-│   ├── test_m2_lsh.py               # M2 MinHash, LSH & Union-Find tests
-│   ├── test_m3_delta.py             # M3 Base-delta RLE & fidelity tests
-│   ├── test_m4_accel.py             # M4 Scalar vs vectorized diff tests
-│   └── test_m5_cow.py               # M5 COW read/write fault handling tests
-├── experiments/
-│   ├── demo_review2.py              # Review 2 live demo script
-│   ├── run_full_eval.py             # Single-command full evaluation harness
-│   ├── parameter_sweep.py           # Mutation, composition & scale sweeps
-│   ├── ablation_m1.py               # Ablation 1: M1 sampling efficacy
-│   ├── ablation_delta.py            # Ablation 2: Adaptive vs fixed thresholding
-│   └── ablation_lsh.py              # Ablation 3: MinHash-LSH vs brute-force
-├── analysis/
-│   ├── plot_results.py              # 300-DPI publication chart generator
-│   └── compare_baselines.py         # Literature baseline comparison & LaTeX exporter
-├── results/
-│   ├── raw/                         # Timestamped CSV experiment outputs
-│   ├── figures/                     # 5 publication PNG charts (Figs 1–5)
-│   └── baseline_comparison_table.tex# Exported LaTeX table snippet
-└── docs/
-    ├── AMDEC_Comprehensive_Project_Documentation.md  <-- THIS FILE
-    ├── Review2_Presentation_Outline.md
-    └── INVENTION_DISCLOSURE.md
+AMDEC (Adaptive Memory Deduplication)
+│
+├── Problem: Exact deduplication (KSM) misses near-duplicates; Delta-compression is O(N^2) slow.
+├── Solution: MinHash LSH for O(N) similarity search + Adaptive COW feedback.
+│
+├── Processing Pipeline
+│   ├── M1: Sampling (Filters HOT volatile pages via min-heap)
+│   ├── M2: Feature Extraction (128B blocks + Positional Index)
+│   ├── M2: MinHash Signature (32 perms)
+│   ├── M2: LSH Bucketing (8 bands -> Candidates)
+│   ├── M2: Clustering (Jaccard > 0.70 + Union-Find)
+│   ├── M3: Base Selection (Medoid center page)
+│   └── M3: Delta Encoding (XOR diff + RLE Spans)
+│
+├── Storage: BASE_PAGE (raw 4KB) + DELTA_PAGE (Spans + Metadata) + FULL_PAGE (Unique/Volatile)
+├── Reconstruction: COW Fault -> Fetch Base -> Apply XOR -> Allocate FULL_PAGE -> Notify M1.
+│
+├── Adaptive Mechanisms
+│   ├── Volatility Quarantine (M5 COW faults penalize pages in M1)
+│   └── Delta Thresholding (M3 abandons deltas > 30% of page size)
+│
+└── Evaluation: Synthetic Zipfian workload shows 70%+ savings with <5% scan overhead (Simulated).
 ```
-
----
-
-## 9. Conclusion & Research Takeaways
-
-1. **Near-Duplicate Potential Unlocked:** Exact-match deduplication misses the vast majority of sharing opportunities in dynamic anonymous memory. AMDEC demonstrates that an adaptive similarity-aware approach achieves **$74.33\%$ logical memory savings** ($3.9\times$ compression).
-2. **Computational Tractability:** MinHash-LSH eliminates **$99.84\%$ of pairwise comparisons**, transforming the unguided $O(N^2)$ search penalty that hindered previous sub-page systems into an efficient $O(N)$ expected lookup.
-3. **Safety & Low Overhead:** Region-aware stability sampling safely skips volatile hot pages ($8\%$ reduction), while on-demand reconstruction completes in **$1.83\ \mu\text{s}$ mean latency** (P99 $<5\ \mu\text{s}$), making similarity-based deduplication computationally tractable for modern virtualized workloads.
-
----
-*AMDEC Project Documentation | Author: Shantanu Tapole | Design Science Research*

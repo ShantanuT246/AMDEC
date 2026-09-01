@@ -6,6 +6,7 @@ and compact metadata-aware delta records using XOR differencing + Run-Length Enc
 """
 
 from dataclasses import dataclass, field
+import hashlib
 import struct
 import time
 from typing import Any, Dict, List, Optional, Tuple
@@ -163,6 +164,27 @@ class BaseDeltaStorageManager:
         else:
             return pages[0]
 
+    def _compute_delta(self, page: Page, base_page: Page) -> DeltaRecord:
+        """Computes the DeltaRecord for page vs base_page."""
+        # Phase A: Exact-hash fast-track (shift vulnerability: common case bypass)
+        # If page content is byte-for-byte identical to base, store a zero-span delta.
+        if hashlib.sha256(bytes(page.content)).digest() == hashlib.sha256(bytes(base_page.content)).digest():
+            return DeltaRecord(
+                page_id=page.page_id,
+                base_page_id=base_page.page_id,
+                spans=[],
+                raw_delta_bytes=0,
+            )
+        xor_diff = self.compute_xor_diff(page.content, base_page.content)
+        spans = self.encode_rle_spans(xor_diff)
+        raw_bytes = sum(len(s.data) for s in spans)
+        return DeltaRecord(
+            page_id=page.page_id,
+            base_page_id=base_page.page_id,
+            spans=spans,
+            raw_delta_bytes=raw_bytes,
+        )
+
     def compress_cluster(self, cluster: SimilarityCluster, page_map: Dict[int, Page]) -> CompressedCluster:
         """Compresses a single similarity cluster into a base page + delta records."""
         cluster_pages = [page_map[pid] for pid in cluster.page_ids if pid in page_map]
@@ -180,20 +202,25 @@ class BaseDeltaStorageManager:
             if page.page_id == base_page.page_id:
                 continue
 
-            xor_diff = self.compute_xor_diff(page.content, base_page.content)
-            spans = self.encode_rle_spans(xor_diff)
-            raw_bytes = sum(len(s.data) for s in spans)
+            delta = self._compute_delta(page, base_page)
 
-            delta = DeltaRecord(
-                page_id=page.page_id,
-                base_page_id=base_page.page_id,
-                spans=spans,
-                raw_delta_bytes=raw_bytes,
-            )
-
-            # Adaptive Thresholding: If delta representation exceeds max ratio, keep full page
+            # Adaptive Thresholding: If delta exceeds max ratio, attempt secondary-base fallback.
+            # This handles transitive cluster members that diverge heavily from the medoid.
             if delta.total_storage_bytes > self.max_delta_bytes:
-                compressed.unmerged_full_pages[page.page_id] = bytearray(page.content)
+                best_delta = delta
+                for alt_base in cluster_pages:
+                    if alt_base.page_id == page.page_id or alt_base.page_id == base_page.page_id:
+                        continue
+                    alt_delta = self._compute_delta(page, alt_base)
+                    if alt_delta.total_storage_bytes < best_delta.total_storage_bytes:
+                        best_delta = alt_delta
+                    if best_delta.total_storage_bytes <= self.max_delta_bytes:
+                        break  # Good enough — stop searching
+
+                if best_delta.total_storage_bytes <= self.max_delta_bytes:
+                    compressed.deltas[page.page_id] = best_delta
+                else:
+                    compressed.unmerged_full_pages[page.page_id] = bytearray(page.content)
             else:
                 compressed.deltas[page.page_id] = delta
 
@@ -218,13 +245,27 @@ class BaseDeltaStorageManager:
         total_unmerged_pages = 0
         total_delta_bytes = 0
         delta_sizes: List[int] = []
+        global_base_registry: Dict[str, int] = {}   # sha256(base) -> cluster_id of canonical base
+        deduped_base_count = 0
 
         clustered_page_ids = set()
 
         for cluster in clusters:
             cc = self.compress_cluster(cluster, page_map)
+
+            # Global base deduplication: if another cluster already stores this exact base
+            # page content, account for the storage only once (avoid double-counting).
+            base_fingerprint = hashlib.sha256(bytes(cc.base_page_content)).hexdigest()
+            if base_fingerprint in global_base_registry:
+                deduped_base_count += 1
+                # The base is shared — don't count its PAGE_SIZE again in storage
+                count_this_base = 0
+            else:
+                global_base_registry[base_fingerprint] = cc.cluster_id
+                count_this_base = 1
+
             compressed_clusters.append(cc)
-            total_base_pages += 1
+            total_base_pages += count_this_base
             total_delta_pages += len(cc.deltas)
             total_unmerged_pages += len(cc.unmerged_full_pages)
 
@@ -269,6 +310,7 @@ class BaseDeltaStorageManager:
             "total_delta_pages": total_delta_pages,
             "total_unmerged_cluster_pages": total_unmerged_pages,
             "total_unclustered_unique_pages": unclustered_count,
+            "deduped_base_pages": deduped_base_count,
             "avg_delta_bytes": float(np.mean(delta_sizes)) if delta_sizes else 0.0,
             "median_delta_bytes": float(np.median(delta_sizes)) if delta_sizes else 0.0,
             "p95_delta_bytes": float(np.percentile(delta_sizes, 95)) if delta_sizes else 0.0,

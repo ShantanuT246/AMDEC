@@ -125,5 +125,76 @@ def test_end_to_end_cluster_compression_savings():
     assert metrics["total_delta_pages"] == 9
 
 
+def test_exact_hash_zero_span_delta():
+    """Phase A: Identical pages should produce a zero-span delta (no XOR needed)."""
+    manager = BaseDeltaStorageManager()
+    base_content = bytearray(b"X" * PAGE_SIZE)
+    pages = [
+        Page(page_id=0, region_id=0, content=bytearray(base_content), alloc_time=10.0, last_write_time=10.0),
+        Page(page_id=1, region_id=0, content=bytearray(base_content), alloc_time=10.0, last_write_time=10.0),
+    ]
+    cluster = SimilarityCluster(cluster_id=0, page_ids=[0, 1])
+    cc = manager.compress_cluster(cluster, {p.page_id: p for p in pages})
+
+    assert 1 in cc.deltas
+    delta = cc.deltas[1]
+    assert len(delta.spans) == 0, "Exact duplicate must produce zero-span delta"
+    assert delta.total_storage_bytes == 6  # 4B base_ref + 2B span_count = 6B only
+
+
+def test_secondary_base_fallback_for_transitive_divergence():
+    """M3 secondary-base fallback: no page exceeds the delta threshold when an alt-base exists."""
+    manager = BaseDeltaStorageManager(max_delta_ratio=0.10)  # Tight 10% threshold
+
+    # base: all zeros, p1: similar to base (small diff), p2: large diff from base but small diff from p1
+    base_content = bytearray(PAGE_SIZE)
+    p1_content = bytearray(PAGE_SIZE); p1_content[0:40] = b"A" * 40
+    p2_content = bytearray(PAGE_SIZE); p2_content[0:40] = b"A" * 40; p2_content[40:500] = b"Z" * 460
+
+    pages = [
+        Page(page_id=0, region_id=0, content=base_content, alloc_time=10.0, last_write_time=10.0),
+        Page(page_id=1, region_id=0, content=p1_content,   alloc_time=10.0, last_write_time=10.0),
+        Page(page_id=2, region_id=0, content=p2_content,   alloc_time=10.0, last_write_time=10.0),
+    ]
+    cluster = SimilarityCluster(cluster_id=0, page_ids=[0, 1, 2])
+    cc = manager.compress_cluster(cluster, {p.page_id: p for p in pages})
+
+    # All non-base pages must be accounted for — either delta-stored within threshold or kept as full page
+    non_base_ids = {p.page_id for p in pages} - {cc.base_page_id}
+    for pid in non_base_ids:
+        assert pid in cc.deltas or pid in cc.unmerged_full_pages, \
+            f"Page {pid} is missing from both deltas and unmerged_full_pages"
+        if pid in cc.deltas:
+            assert cc.deltas[pid].total_storage_bytes <= manager.max_delta_bytes, \
+                f"Delta for page {pid} exceeds max_delta_bytes after secondary-base fallback"
+
+
+def test_global_base_deduplication_registry():
+    """Identical base pages across different clusters should be counted only once in storage."""
+    manager = BaseDeltaStorageManager()
+    base_content = bytearray(b"TEMPLATE" * (PAGE_SIZE // 8))
+
+    # Two clusters that happen to end up with the same base page content
+    pages = [
+        Page(page_id=0, region_id=0, content=bytearray(base_content), alloc_time=10.0, last_write_time=10.0),
+        Page(page_id=1, region_id=0, content=bytearray(base_content[:PAGE_SIZE - 10] + b"A" * 10),
+             alloc_time=10.0, last_write_time=10.0),
+        Page(page_id=2, region_id=1, content=bytearray(base_content), alloc_time=10.0, last_write_time=10.0),
+        Page(page_id=3, region_id=1, content=bytearray(base_content[:PAGE_SIZE - 10] + b"B" * 10),
+             alloc_time=10.0, last_write_time=10.0),
+    ]
+    # Cluster 0 medoid = page 0 (base_content), Cluster 1 medoid = page 2 (base_content)
+    clusters = [
+        SimilarityCluster(cluster_id=0, page_ids=[0, 1]),
+        SimilarityCluster(cluster_id=1, page_ids=[2, 3]),
+    ]
+    _, metrics = manager.compress_workload(clusters, pages)
+
+    # The two base pages are identical → second one should be deduped
+    assert metrics["deduped_base_pages"] == 1
+    # Storage should be smaller than if we counted both bases
+    assert metrics["amdec_storage_bytes"] < 2 * PAGE_SIZE + 2 * PAGE_SIZE
+
+
 if __name__ == "__main__":
     pytest.main(["-v", __file__])

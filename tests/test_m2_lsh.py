@@ -39,6 +39,37 @@ def test_union_find_disjoint_set():
     assert uf.find(1) != uf.find(4)
 
 
+def test_large_bucket_exact_hash_grouping():
+    """
+    Regression test: A workload of 200 identical zero-pages must form a single cluster.
+    Previously, the chaining strategy could fragment this into multiple clusters if
+    any consecutive Jaccard verification link failed.
+    """
+    engine = MinHashLSHClusteringEngine(block_size=128, num_hashes=32, num_bands=8, similarity_threshold=0.70)
+
+    # 200 byte-for-byte identical zero-pages
+    num_zero_pages = 200
+    zero_content = bytearray(PAGE_SIZE)
+    zero_pages = [
+        Page(
+            page_id=i,
+            region_id=0,
+            content=bytearray(zero_content),
+            alloc_time=10.0,
+            last_write_time=10.0,
+        )
+        for i in range(num_zero_pages)
+    ]
+
+    clusters, stats = engine.cluster_pages(zero_pages, verify_similarity=True)
+
+    # All 200 identical pages MUST form a single cluster — no fragmentation allowed
+    assert len(clusters) == 1, (
+        f"Identical zero-pages split into {len(clusters)} clusters! Exact-hash grouping failed."
+    )
+    assert len(clusters[0].page_ids) == num_zero_pages
+
+
 def test_page_chunking():
     """Verify 4096-byte page is chunked into expected count and size of sub-blocks."""
     engine_128 = MinHashLSHClusteringEngine(block_size=128)
