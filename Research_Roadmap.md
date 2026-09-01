@@ -69,6 +69,7 @@ AMDEC/
 │   ├── test_m1_sampling.py           # Stability tiering & feedback tests
 │   ├── test_m2_lsh.py                # MinHash, LSH indexing & clustering tests
 │   ├── test_m3_delta.py              # Base selection, delta RLE & fidelity tests
+│   ├── test_m4_accel.py              # Vectorized uint64 vs scalar diff tests
 │   └── test_m5_cow.py                # COW write handling & page reconstruction tests
 │
 ├── analysis/

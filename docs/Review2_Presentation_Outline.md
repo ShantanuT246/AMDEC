@@ -47,9 +47,9 @@
 - **Cluster Quality:** **98.9% Ground-Truth Cluster Purity** (zero false-positive cross-cluster pollution).
 
 ### 3. Module 3 (Base-Delta Compression Efficacy)
-- **Logical Memory Savings:** $>70\%$ memory reduction on near-duplicate clusters.
+- **Logical Memory Savings:** **$74.3\%$** memory reduction ($3.9\times$ compression) on near-duplicate clusters.
 - **Reconstruction Fidelity:** $100\%$ byte-for-byte exact equality verified.
-- **Automated Tests:** 19/19 passing tests in `pytest`.
+- **Automated Tests:** **29/29 passing tests** in `pytest`.
 
 ---
 

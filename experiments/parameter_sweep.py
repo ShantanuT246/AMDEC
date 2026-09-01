@@ -61,10 +61,10 @@ def run_parameter_sweep():
         candidates, _ = m1_engine.filter_and_prioritize(pages, current_time=100.0)
         candidate_pages = [c.page for c in candidates]
 
-        m2_engine = MinHashLSHClusteringEngine(block_size=128, num_hashes=32, num_bands=8, similarity_threshold=0.60)
+        m2_engine = MinHashLSHClusteringEngine(block_size=128, num_hashes=32, num_bands=8, similarity_threshold=0.70)
         clusters, _ = m2_engine.cluster_pages(candidate_pages)
 
-        m3_manager = BaseDeltaStorageManager(max_delta_ratio=0.35)
+        m3_manager = BaseDeltaStorageManager(max_delta_ratio=0.30)
         _, metrics = m3_manager.compress_workload(clusters, pages)
         rt_ms = (time.perf_counter() - t0) * 1000.0
 

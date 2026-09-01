@@ -209,17 +209,18 @@ Across the literature, every existing system falls into one of three incomplete 
 | Metric | Measured Result | Significance |
 |---|---|---|
 | **Baseline Uncompressed Memory** | $39.06\text{ MB}$ ($10,000$ pages) | Raw unshared allocation |
-| **AMDEC Compressed Memory** | **$10.03\text{ MB}$** | Base pages + deltas + metadata |
-| **Logical Memory Savings** | **$74.33\%$** | **$3.90\times$ effective compression** |
+| **AMDEC Compressed Memory** | **$9.94 - 10.05\text{ MB}$** | Base pages + deltas + metadata |
+| **Logical Memory Savings** | **$74.27\% - 74.54\%$** | **$3.89\times - 3.93\times$ effective compression** |
 | **M1 Volatile Pages Skipped** | $801\text{ pages}$ ($8.0\%$) | Saves scan cycles on hot working set |
-| **M2 Search Space Reduction** | **$99.843\%$** | Evaluated 56K pairs vs 42.7M brute-force |
-| **Similarity Clusters Formed** | $150\text{ clusters}$ | Grouping $7,627$ near-duplicate pages |
-| **Mean Delta Storage Footprint** | **$24.2\text{ bytes / page}$** | Including all record headers & offset metadata |
-| **Mean Reconstruction Latency** | **$1.83\ \mu\text{s}$** | Extremely low retrieval penalty |
-| **95th Percentile (P95) Latency** | **$3.79\ \mu\text{s}$** | Bounded tail latency ($<5\ \mu\text{s}$) |
-| **99th Percentile (P99) Latency** | **$4.33\ \mu\text{s}$** | Bounded tail latency |
-| **M4 Acceleration Speedup** | **$182.38\times$** ($3,173\text{ MB/s}$) | Highly efficient vector differencing |
-| **Total Simulation Throughput** | $2,319\text{ pages/second}$ | Fast end-to-end Python pipeline |
+| **M2 Search Space Reduction** | **$99.84\%$** | Evaluated 56K pairs vs 42.7M brute-force |
+| **Similarity Clusters Formed** | $150 - 152\text{ clusters}$ | Grouping $7,623 - 7,649$ near-duplicate pages |
+| **Mean Delta Storage Footprint** | **$24.2 - 24.3\text{ bytes / page}$** | Including all record headers & offset metadata |
+| **Mean Reconstruction Latency** | **$3.18\ \mu\text{s}$** | Low on-demand retrieval penalty |
+| **Median (P50) Latency** | **$2.80\ \mu\text{s}$** | Fast standard retrieval |
+| **95th Percentile (P95) Latency** | **$6.54 - 6.67\ \mu\text{s}$** | Bounded tail latency ($<10\ \mu\text{s}$) |
+| **99th Percentile (P99) Latency** | **$7.46 - 7.50\ \mu\text{s}$** | Bounded tail latency ($<10\ \mu\text{s}$) |
+| **M4 Acceleration Speedup** | **$173\times - 223\times$** ($>1,800 - 3,300\text{ MB/s}$) | Highly efficient vector differencing |
+| **Total Simulation Throughput** | $1,300 - 2,400\text{ pages/second}$ | Fast end-to-end Python pipeline |
 
 ---
 
@@ -398,9 +399,9 @@ AMDEC/
 
 ## 9. Conclusion & Research Takeaways
 
-1. **Near-Duplicate Potential Unlocked:** Exact-match deduplication misses the vast majority of sharing opportunities in dynamic anonymous memory. AMDEC demonstrates that an adaptive similarity-aware approach achieves **$74.33\%$ logical memory savings** ($3.9\times$ compression).
+1. **Near-Duplicate Potential Unlocked:** Exact-match deduplication misses the vast majority of sharing opportunities in dynamic anonymous memory. AMDEC demonstrates that an adaptive similarity-aware approach achieves **$74.27\% - 74.54\%$ logical memory savings** ($3.9\times$ compression).
 2. **Computational Tractability:** MinHash-LSH eliminates **$99.84\%$ of pairwise comparisons**, transforming the unguided $O(N^2)$ search penalty that hindered previous sub-page systems into an efficient $O(N)$ expected lookup.
-3. **Safety & Low Overhead:** Region-aware stability sampling safely skips volatile hot pages ($8\%$ reduction), while on-demand reconstruction completes in **$1.83\ \mu\text{s}$ mean latency** (P99 $<5\ \mu\text{s}$), making similarity-based deduplication computationally tractable for modern virtualized workloads.
+3. **Safety & Low Overhead:** Region-aware stability sampling safely skips volatile hot pages ($8\%$ reduction), while on-demand reconstruction completes in **$3.18\ \mu\text{s}$ mean latency** (P95 $= 6.54\ \mu\text{s}$, P99 $= 7.50\ \mu\text{s} < 10\ \mu\text{s}$), making similarity-based deduplication computationally tractable for modern virtualized workloads.
 
 ---
 *AMDEC Project Documentation | Author: Shantanu Tapole | Design Science Research*
@@ -441,7 +442,7 @@ Module 5 simulates the logical state machine of Copy-on-Write fault handling (pa
 - TLB shootdown latency across CPU cores (~100–500 cycles per remote CPU).
 - Page-table lock contention under concurrent write workloads.
 
-A production kernel implementation would add approximately **10–50 µs per COW fault** on top of the $1.83\ \mu\text{s}$ reconstruction latency measured in this simulation. The measured reconstruction time represents the _algorithmic lower bound_, not the full system cost.
+A production kernel implementation would add approximately **10–50 µs per COW fault** on top of the $3.18\ \mu\text{s}$ reconstruction latency measured in this simulation. The measured reconstruction time represents the _algorithmic lower bound_, not the full system cost.
 
 **T6 — Computational Acceleration Benchmark Scope (Module 4)**  
 The $182.4\times$ speedup reported for NumPy uint64 vectorized XOR over scalar Python loops is a Python-internal benchmark. A production OS kernel implementation using AVX2/AVX-512 C intrinsics would achieve several GB/s per core throughput — orders of magnitude beyond what a Python interpreter can attain. This benchmark demonstrates the _algorithmic principle_ of SIMD-friendly delta differencing, not production-level throughput numbers.

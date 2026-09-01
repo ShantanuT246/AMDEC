@@ -40,7 +40,7 @@ def run_ablation_delta(num_pages: int = 5000):
     candidates, _ = m1_engine.filter_and_prioritize(pages, current_time=100.0)
     candidate_pages = [c.page for c in candidates]
 
-    m2_engine = MinHashLSHClusteringEngine(block_size=128, num_hashes=32, num_bands=8, similarity_threshold=0.60)
+    m2_engine = MinHashLSHClusteringEngine(block_size=128, num_hashes=32, num_bands=8, similarity_threshold=0.70)
     clusters, _ = m2_engine.cluster_pages(candidate_pages)
 
     # -------------------------------------------------------------

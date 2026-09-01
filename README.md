@@ -249,13 +249,11 @@ The project relies on standard Python libraries (`datasketch`, `numpy`). The `ru
 
 ## 22. Bug and Correctness Audit
 
-*   **Severity:** High
-*   **Location:** `m2_lsh_clustering.py` : `cluster_pages` (Lines 201-213)
-*   **Problem:** To prevent $O(N^2)$ inside massive LSH buckets (e.g. 500 identical pages), the code samples pairs (`np.random.choice`) and chains consecutive elements.
-*   **Trigger:** Highly uniform workloads (e.g., zero-pages).
-*   **Why it happens:** Chaining `[0,1,2,3...]` ensures a single connected component, but Jaccard verification might fail on a single link, splitting a massive cluster artificially.
-*   **Impact:** Lower deduplication efficiency for massive identical blocks.
-*   **Fix:** For buckets > 64, do a quick exact hash check first to group exact duplicates into sub-clusters before randomized cross-sampling.
+*   **Status:** **[RESOLVED & FIXED]**
+*   **Location:** `m2_lsh_clustering.py` : `cluster_pages` (Lines 201-244)
+*   **Original Issue:** To prevent $O(N^2)$ inside massive LSH buckets (e.g. 500 identical pages), the code previously sampled pairs (`np.random.choice`) and chained consecutive elements, which risked cluster fragmentation on a single failed link.
+*   **Implemented Fix:** For buckets $>64$ pages, the code now performs a fast SHA-256 exact-hash pre-grouping pass. Byte-identical pages are grouped into guaranteed components ($J=1.0$), and group representatives are chained with cross-sampling, preserving both $O(N)$ candidate generation and $100\%$ zero-fragmentation for identical/uniform blocks.
+*   **Verification:** Verified via regression test `test_large_bucket_exact_hash_grouping()` (all 200 zero-pages form a single cluster).
 
 ---
 
