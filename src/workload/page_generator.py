@@ -71,18 +71,6 @@ class SyntheticWorkloadGenerator:
     - ~13% unique / high-entropy pages
     """
 
-    def __init__(
-        self,
-        seed: int = 42,
-        near_dup_ratio: float = 0.80,
-        exact_dup_ratio: float = 0.07,
-        unique_ratio: float = 0.13,
-        num_regions: int = 8,
-        zipf_param: float = 1.2,
-    ):
-        total_ratio = near_dup_ratio + exact_dup_ratio + unique_ratio
-        if not (0.999 <= total_ratio <= 1.001):
-            raise ValueError(f"Ratios must sum to 1.0, got {total_ratio}")
 
     def __init__(
         self,
