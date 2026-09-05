@@ -54,17 +54,18 @@ class CompressedCluster:
     base_page_content: bytearray
     deltas: Dict[int, DeltaRecord] = field(default_factory=dict)
     unmerged_full_pages: Dict[int, bytearray] = field(default_factory=dict)
+    secondary_bases: Dict[int, bytearray] = field(default_factory=dict)
 
     @property
     def total_logical_bytes(self) -> int:
-        base_cost = PAGE_SIZE
+        base_cost = (1 + len(self.secondary_bases)) * PAGE_SIZE
         delta_cost = sum(d.total_storage_bytes for d in self.deltas.values())
         unmerged_cost = len(self.unmerged_full_pages) * PAGE_SIZE
         return base_cost + delta_cost + unmerged_cost
 
     @property
     def uncompressed_bytes(self) -> int:
-        total_pages = 1 + len(self.deltas) + len(self.unmerged_full_pages)
+        total_pages = 1 + len(self.secondary_bases) + len(self.deltas) + len(self.unmerged_full_pages)
         return total_pages * PAGE_SIZE
 
 
@@ -91,7 +92,7 @@ class BaseDeltaStorageManager:
 
     def compute_xor_diff(self, page_content: bytearray, base_content: bytearray) -> bytearray:
         """Computes raw byte-level XOR diff between target and base."""
-        # Fast 64-bit NumPy vectorized XOR
+        # NumPy vectorized byte-level XOR differencing
         arr_p = np.frombuffer(page_content, dtype=np.uint8)
         arr_b = np.frombuffer(base_content, dtype=np.uint8)
         xor_arr = np.bitwise_xor(arr_p, arr_b)
@@ -146,15 +147,19 @@ class BaseDeltaStorageManager:
                         best_page = p_cand
                 return best_page
             else:
-                # Sample 8 candidates for large clusters to maintain fast linear time
-                sample_candidates = self.rng.choice(pages, size=min(8, len(pages)), replace=False)
+                # Sample candidates and evaluate distance against a representative sample of cluster members
+                num_cands = min(8, len(pages))
+                sample_candidates = self.rng.choice(pages, size=num_cands, replace=False)
+                eval_sample = self.rng.choice(pages, size=min(32, len(pages)), replace=False)
+                eval_arrays = [np.frombuffer(p.content, dtype=np.uint8) for p in eval_sample]
+
                 min_dist = float("inf")
                 best_page = sample_candidates[0]
                 for p_cand in sample_candidates:
                     cand_arr = np.frombuffer(p_cand.content, dtype=np.uint8)
                     total_dist = sum(
-                        int(np.count_nonzero(cand_arr != np.frombuffer(p.content, dtype=np.uint8)))
-                        for p in sample_candidates
+                        int(np.count_nonzero(cand_arr != other_arr))
+                        for other_arr in eval_arrays
                     )
                     if total_dist < min_dist:
                         min_dist = total_dist
@@ -171,7 +176,7 @@ class BaseDeltaStorageManager:
         """Computes the DeltaRecord for page vs base_page."""
         # Phase A: Exact-hash fast-track (shift vulnerability: common case bypass)
         # If page content is byte-for-byte identical to base, store a zero-span delta.
-        if hashlib.sha256(bytes(page.content)).digest() == hashlib.sha256(bytes(base_page.content)).digest():
+        if page.content == base_page.content:
             return DeltaRecord(
                 page_id=page.page_id,
                 base_page_id=base_page.page_id,
@@ -189,7 +194,10 @@ class BaseDeltaStorageManager:
         )
 
     def compress_cluster(self, cluster: SimilarityCluster, page_map: Dict[int, Page]) -> CompressedCluster:
-        """Compresses a single similarity cluster into a base page + delta records."""
+        """
+        Compresses a single similarity cluster into a base page + delta records,
+        employing secondary-base fallback for transitively divergent members.
+        """
         cluster_pages = [page_map[pid] for pid in cluster.page_ids if pid in page_map]
         if not cluster_pages:
             raise ValueError(f"No pages found for cluster {cluster.cluster_id}")
@@ -201,17 +209,57 @@ class BaseDeltaStorageManager:
             base_page_content=bytearray(base_page.content),
         )
 
+        divergent_pages: List[Page] = []
+
         for page in cluster_pages:
             if page.page_id == base_page.page_id:
                 continue
 
             delta = self._compute_delta(page, base_page)
 
-            # Adaptive Thresholding: If delta representation exceeds max ratio, keep full page
-            if delta.total_storage_bytes > self.max_delta_bytes:
-                compressed.unmerged_full_pages[page.page_id] = bytearray(page.content)
-            else:
+            # Adaptive Thresholding: If within max ratio, record delta
+            if delta.total_storage_bytes <= self.max_delta_bytes:
                 compressed.deltas[page.page_id] = delta
+            else:
+                # Transitive divergence: page exceeds threshold when diffed against primary base
+                divergent_pages.append(page)
+
+        # Secondary-Base Fallback (Threat T2 Mitigation):
+        # If divergent pages exist, attempt to group them under secondary bases within the cluster
+        if divergent_pages:
+            remaining_divergent = list(divergent_pages)
+            while remaining_divergent:
+                # Check if any remaining page matches an already-selected secondary base
+                unmatched: List[Page] = []
+                for p in remaining_divergent:
+                    matched_sec = False
+                    for sec_id, sec_content in compressed.secondary_bases.items():
+                        sec_dummy_page = Page(
+                            page_id=sec_id,
+                            region_id=p.region_id,
+                            content=sec_content,
+                            alloc_time=p.alloc_time,
+                            last_write_time=p.last_write_time,
+                        )
+                        delta_sec = self._compute_delta(p, sec_dummy_page)
+                        if delta_sec.total_storage_bytes <= self.max_delta_bytes:
+                            compressed.deltas[p.page_id] = delta_sec
+                            matched_sec = True
+                            break
+                    if not matched_sec:
+                        unmatched.append(p)
+
+                if len(unmatched) >= 2:
+                    # Select secondary base from the unmatched divergent pages
+                    sec_base = self.select_base_page(unmatched)
+                    compressed.secondary_bases[sec_base.page_id] = bytearray(sec_base.content)
+                    unmatched = [p for p in unmatched if p.page_id != sec_base.page_id]
+                    remaining_divergent = unmatched
+                else:
+                    # Single leftover page cannot amortize a base page; store as unmerged full page
+                    for p in unmatched:
+                        compressed.unmerged_full_pages[p.page_id] = bytearray(p.content)
+                    break
 
         return compressed
 
@@ -242,19 +290,27 @@ class BaseDeltaStorageManager:
         for cluster in clusters:
             cc = self.compress_cluster(cluster, page_map)
 
-            # Global base deduplication: if another cluster already stores this exact base
-            # page content, account for the storage only once (avoid double-counting).
+            # Global base deduplication for primary base
             base_fingerprint = hashlib.sha256(bytes(cc.base_page_content)).hexdigest()
             if base_fingerprint in global_base_registry:
                 deduped_base_count += 1
-                # The base is shared — don't count its PAGE_SIZE again in storage
                 count_this_base = 0
             else:
                 global_base_registry[base_fingerprint] = cc.cluster_id
                 count_this_base = 1
 
+            # Account for secondary bases
+            sec_base_count = 0
+            for sec_content in cc.secondary_bases.values():
+                sec_fp = hashlib.sha256(bytes(sec_content)).hexdigest()
+                if sec_fp in global_base_registry:
+                    deduped_base_count += 1
+                else:
+                    global_base_registry[sec_fp] = cc.cluster_id
+                    sec_base_count += 1
+
             compressed_clusters.append(cc)
-            total_base_pages += count_this_base
+            total_base_pages += (count_this_base + sec_base_count)
             total_delta_pages += len(cc.deltas)
             total_unmerged_pages += len(cc.unmerged_full_pages)
 

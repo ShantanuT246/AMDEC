@@ -79,7 +79,7 @@ class SyntheticWorkloadGenerator:
         exact_dup_ratio: float = 0.07,
         unique_ratio: float = 0.13,
         num_regions: int = 8,
-        zipf_param: float = 1.2,
+        zipf_param: float = 1.3,
     ):
         total_ratio = near_dup_ratio + exact_dup_ratio + unique_ratio
         if not (0.999 <= total_ratio <= 1.001):

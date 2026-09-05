@@ -140,5 +140,30 @@ def test_write_to_base_page_does_not_corrupt_deltas():
     assert read_delta == target_content, "Delta reconstruction must not be corrupted by base page writes!"
 
 
+def test_read_returns_defensive_copy():
+    """Verify mutating read_page output does not corrupt stored FULL_PAGE or BASE_PAGE content."""
+    generator = SyntheticWorkloadGenerator(seed=42)
+    m3_manager = BaseDeltaStorageManager()
+    cow_handler = SimulatedCOWHandler(delta_manager=m3_manager)
+
+    base_content = generator._create_template_page_content("heap_struct")
+    pages = [
+        Page(page_id=0, region_id=0, content=bytearray(base_content), alloc_time=10.0, last_write_time=10.0),
+        Page(page_id=1, region_id=0, content=bytearray(base_content), alloc_time=10.0, last_write_time=10.0),
+    ]
+    cluster = SimilarityCluster(cluster_id=0, page_ids=[0, 1])
+    compressed_clusters, _ = m3_manager.compress_workload([cluster], pages)
+    cow_handler.populate_from_compressed_clusters(compressed_clusters, pages)
+
+    # Read base page and mutate the returned buffer
+    buffer = cow_handler.read_page(0)
+    buffer[0:10] = b"CORRUPTED!"
+
+    # Read again: stored page table content must remain pristine
+    clean_read = cow_handler.read_page(0)
+    assert clean_read[:10] != b"CORRUPTED!"
+    assert clean_read == base_content
+
+
 if __name__ == "__main__":
     pytest.main(["-v", __file__])

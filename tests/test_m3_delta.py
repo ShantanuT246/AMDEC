@@ -143,30 +143,48 @@ def test_exact_hash_zero_span_delta():
 
 
 def test_secondary_base_fallback_for_transitive_divergence():
-    """M3 secondary-base fallback: no page exceeds the delta threshold when an alt-base exists."""
-    manager = BaseDeltaStorageManager(max_delta_ratio=0.10)  # Tight 10% threshold
+    """M3 secondary-base fallback: transitive divergence creates a secondary base to capture deltas."""
+    manager = BaseDeltaStorageManager(max_delta_ratio=0.10)  # Tight 10% threshold (409 bytes max delta)
 
-    # base: all zeros, p1: similar to base (small diff), p2: large diff from base but small diff from p1
+    # base: all zeros
+    # p1: similar to base (40B diff <= 409B -> primary delta)
+    # p2: large diff from base (500B > 409B)
+    # p3: large diff from base (508B > 409B), but only 8B diff from p2
     base_content = bytearray(PAGE_SIZE)
     p1_content = bytearray(PAGE_SIZE); p1_content[0:40] = b"A" * 40
     p2_content = bytearray(PAGE_SIZE); p2_content[0:40] = b"A" * 40; p2_content[40:500] = b"Z" * 460
+    p3_content = bytearray(PAGE_SIZE); p3_content[0:40] = b"A" * 40; p3_content[40:500] = b"Z" * 460; p3_content[500:508] = b"W" * 8
 
     pages = [
         Page(page_id=0, region_id=0, content=base_content, alloc_time=10.0, last_write_time=10.0),
         Page(page_id=1, region_id=0, content=p1_content,   alloc_time=10.0, last_write_time=10.0),
         Page(page_id=2, region_id=0, content=p2_content,   alloc_time=10.0, last_write_time=10.0),
+        Page(page_id=3, region_id=0, content=p3_content,   alloc_time=10.0, last_write_time=10.0),
     ]
-    cluster = SimilarityCluster(cluster_id=0, page_ids=[0, 1, 2])
+    cluster = SimilarityCluster(cluster_id=0, page_ids=[0, 1, 2, 3])
     cc = manager.compress_cluster(cluster, {p.page_id: p for p in pages})
 
-    # All non-base pages must be accounted for — either delta-stored within threshold or kept as full page
-    non_base_ids = {p.page_id for p in pages} - {cc.base_page_id}
-    for pid in non_base_ids:
-        assert pid in cc.deltas or pid in cc.unmerged_full_pages, \
-            f"Page {pid} is missing from both deltas and unmerged_full_pages"
-        if pid in cc.deltas:
-            assert cc.deltas[pid].total_storage_bytes <= manager.max_delta_bytes, \
-                f"Delta for page {pid} exceeds max_delta_bytes after secondary-base fallback"
+    # Primary medoid is page 1 (min total pairwise byte distance across cluster)
+    assert cc.base_page_id == 1
+    # Page 0 matches primary base (40B diff <= 409B)
+    assert 0 in cc.deltas
+    assert cc.deltas[0].base_page_id == 1
+
+    # Pages 2 & 3 diverged from primary base (>409B), but match each other:
+    # One becomes secondary base, the other is delta-compressed against it
+    assert len(cc.secondary_bases) == 1
+    sec_base_id = list(cc.secondary_bases.keys())[0]
+    sec_delta_id = 3 if sec_base_id == 2 else 2
+
+    assert sec_delta_id in cc.deltas
+    assert cc.deltas[sec_delta_id].base_page_id == sec_base_id
+    assert cc.deltas[sec_delta_id].total_storage_bytes <= manager.max_delta_bytes
+    assert len(cc.unmerged_full_pages) == 0, "Secondary-base fallback should prevent unmerged full pages"
+
+    # Verify reconstruction of secondary delta
+    reconstructed = manager.reconstruct_page(cc.secondary_bases[sec_base_id], cc.deltas[sec_delta_id])
+    expected_content = p3_content if sec_delta_id == 3 else p2_content
+    assert reconstructed == expected_content
 
 
 def test_global_base_deduplication_registry():

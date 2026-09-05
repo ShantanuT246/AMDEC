@@ -50,8 +50,8 @@ class RegionSamplingEngine:
 
     def __init__(
         self,
-        hot_write_rate_threshold: float = 0.08,    # Writes per simulated second to classify as HOT
-        cold_write_rate_threshold: float = 0.01,   # Writes per simulated second to classify as COLD
+        hot_write_rate_threshold: float = 0.06,    # Writes per simulated second to classify as HOT (aligned with config)
+        cold_write_rate_threshold: float = 0.005,  # Writes per simulated second to classify as COLD
         min_age_for_cold: float = 10.0,             # Minimum lifetime (seconds) to qualify as COLD
         cow_penalty_weight: float = 2.5,           # Multiplier penalty for pages with COW breaks
         region_volatility_threshold: float = 0.25,  # Region write rate above which region is throttled

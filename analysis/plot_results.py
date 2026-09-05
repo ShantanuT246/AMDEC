@@ -84,11 +84,11 @@ def generate_all_plots():
         savings_errs = [float(r["savings_ci_hw"]) for r in mut_rows]
         delta_bytes = [float(r["avg_delta_bytes_mean"]) for r in mut_rows]
     else:
-        # Fallback inline generation if sweep CSV not pre-computed
+        # Fallback inline generation if sweep CSV not pre-computed (matches empirical data)
         mut_rates_pct = [0.1, 0.5, 1.0, 2.0, 5.0, 10.0, 20.0, 30.0]
-        savings_means = [78.4, 74.8, 71.2, 64.5, 53.1, 41.8, 36.2, 34.8]
-        savings_errs = [0.4, 0.5, 0.5, 0.6, 0.7, 0.6, 0.5, 0.5]
-        delta_bytes = [18.2, 24.0, 38.4, 68.1, 154.2, 312.0, 580.4, 892.1]
+        savings_means = [86.7, 86.4, 68.5, 11.8, 7.0, 7.0, 7.0, 7.0]
+        savings_errs = [0.1, 0.2, 7.9, 3.1, 0.0, 0.0, 0.0, 0.0]
+        delta_bytes = [13.8, 21.1, 43.5, 37.2, 6.0, 6.0, 6.0, 6.0]
 
     fig, ax1 = plt.subplots(figsize=(6.5, 4.2), dpi=300)
     color = "#1f77b4"
@@ -321,7 +321,7 @@ def generate_all_plots():
     lines = [line1, line2[0]]
     labels = ["Runtime (ms)", "Throughput (pages/s)"]
     ax1.legend(lines, labels, loc="upper left", frameon=True)
-    plt.title("AMDEC Linear Scalability & Sustained Throughput vs. Scale")
+    plt.title("AMDEC Scalability & Sustained Throughput vs. Scale")
     fig.tight_layout()
     fig6_path = os.path.join(figures_dir, "fig6_scalability_throughput.png")
     plt.savefig(fig6_path)
@@ -425,7 +425,8 @@ def generate_all_plots():
         "Diff Engine\n(Pairwise delta)",
         "AMDEC\n(This Work)"
     ]
-    footprints_mb = [39.06, 36.33, 33.59, 21.48, 10.02]
+    # Uses empirical 10-trial AMDEC logical footprint (10.31 MB, 73.6% savings)
+    footprints_mb = [39.06, 36.33, 33.59, 21.48, 10.31]
     colors = ["#7f7f7f", "#bcbd22", "#17becf", "#e377c2", "#2ca02c"]
 
     fig, ax = plt.subplots(figsize=(8, 4.3), dpi=300)

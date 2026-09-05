@@ -5,7 +5,7 @@ Extends the LSH vs brute-force comparison to larger dataset sizes:
 N = 1,000 / 2,500 / 5,000 / 10,000
 
 For each N:
-- Runs brute-force O(N²) all-pairs IF feasible (timeout after 5 minutes per trial).
+- Runs brute-force O(N²) all-pairs IF feasible (timeout after 15 seconds per trial).
 - Always runs MinHash-LSH.
 - Reports: candidate pairs, total pairs, reduction %, runtime, speedup, cluster agreement.
 - Uses identical workloads/seeds for fair comparison.
@@ -27,7 +27,7 @@ from src.workload.page_generator import SyntheticWorkloadGenerator
 from src.modules.m2_lsh_clustering import MinHashLSHClusteringEngine, UnionFind
 
 # Maximum time to allow brute-force per trial (seconds)
-BF_TIMEOUT_S = 8.0
+BF_TIMEOUT_S = 15.0
 
 
 def run_lsh_scalability(

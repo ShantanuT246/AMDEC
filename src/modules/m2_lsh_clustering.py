@@ -207,7 +207,6 @@ class MinHashLSHClusteringEngine:
                     # This guarantees exact-duplicate pages are always in the same
                     # Union-Find component regardless of Jaccard threshold, preventing
                     # artificial cluster fragmentation on a single failed verification link.
-                    import hashlib
                     hash_groups: Dict[str, List[int]] = {}
                     for pid in bucket_pages:
                         page_content = page_content_map.get(pid)
@@ -226,20 +225,18 @@ class MinHashLSHClusteringEngine:
                             candidate_pairs.add((min(p1, p2), max(p1, p2)))
                         group_representatives.append(group_ids[0])  # One rep per unique hash
 
-                    # Step 3: Chain representatives and cross-sample between them
-                    # Chaining guarantees spanning connectivity across the bucket
+                    # Step 3: Connect representatives and cross-sample between them
                     n_reps = len(group_representatives)
                     if n_reps > 1:
-                        for i in range(n_reps - 1):
-                            p1, p2 = group_representatives[i], group_representatives[i + 1]
-                            candidate_pairs.add((min(p1, p2), max(p1, p2)))
-
                         if n_reps <= 64:
                             for i in range(n_reps):
                                 for j in range(i + 1, n_reps):
                                     p1, p2 = group_representatives[i], group_representatives[j]
                                     candidate_pairs.add((min(p1, p2), max(p1, p2)))
                         else:
+                            for i in range(n_reps - 1):
+                                p1, p2 = group_representatives[i], group_representatives[i + 1]
+                                candidate_pairs.add((min(p1, p2), max(p1, p2)))
                             # Sample additional cross pairs across representatives
                             sample_k = min(n_reps * 2, 500)
                             for _ in range(sample_k):

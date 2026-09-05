@@ -51,7 +51,8 @@ class SimulatedCOWHandler:
         self.delta_manager = delta_manager or BaseDeltaStorageManager()
         self.sampling_engine = sampling_engine
         self.page_table: Dict[int, PageTableEntry] = {}
-        self.cluster_bases: Dict[int, bytearray] = {}  # Immutable storage for cluster base pages
+        self.cluster_bases: Dict[int, bytearray] = {}  # cluster_id -> base_page_content
+        self.page_bases: Dict[int, bytearray] = {}     # base_page_id -> immutable base content
         self.reconstruction_latencies_us: List[float] = []
 
     def populate_from_compressed_clusters(
@@ -62,6 +63,7 @@ class SimulatedCOWHandler:
         """Populates the simulated page table from Module 3 compressed cluster outputs."""
         self.page_table.clear()
         self.cluster_bases.clear()
+        self.page_bases.clear()
         self.reconstruction_latencies_us.clear()
 
         page_map = {p.page_id: p for p in all_pages}
@@ -70,8 +72,9 @@ class SimulatedCOWHandler:
         for cc in compressed_clusters:
             # Register immutable cluster base content
             self.cluster_bases[cc.cluster_id] = bytearray(cc.base_page_content)
+            self.page_bases[cc.base_page_id] = bytearray(cc.base_page_content)
 
-            # 1. Register Base Page
+            # 1. Register Primary Base Page
             self.page_table[cc.base_page_id] = PageTableEntry(
                 page_id=cc.base_page_id,
                 state=PageState.BASE_PAGE,
@@ -80,13 +83,24 @@ class SimulatedCOWHandler:
             )
             accounted_page_ids.add(cc.base_page_id)
 
+            # Register Secondary Base Pages (Threat T2 sub-clusters)
+            for sec_id, sec_content in cc.secondary_bases.items():
+                self.page_bases[sec_id] = bytearray(sec_content)
+                self.page_table[sec_id] = PageTableEntry(
+                    page_id=sec_id,
+                    state=PageState.BASE_PAGE,
+                    content=bytearray(sec_content),
+                    cluster_id=cc.cluster_id,
+                )
+                accounted_page_ids.add(sec_id)
+
             # 2. Register Delta Pages
             for page_id, delta in cc.deltas.items():
                 self.page_table[page_id] = PageTableEntry(
                     page_id=page_id,
                     state=PageState.DELTA_PAGE,
                     delta=delta,
-                    base_page_id=cc.base_page_id,
+                    base_page_id=delta.base_page_id if hasattr(delta, "base_page_id") else cc.base_page_id,
                     cluster_id=cc.cluster_id,
                 )
                 accounted_page_ids.add(page_id)
@@ -115,6 +129,7 @@ class SimulatedCOWHandler:
         """
         Simulates read access to a page.
         If DELTA_PAGE, reconstructs content from base + delta and logs latency.
+        Returns a defensive bytearray copy to prevent out-of-band page corruption.
         """
         if page_id not in self.page_table:
             raise KeyError(f"Page #{page_id} not found in simulated page table")
@@ -123,10 +138,10 @@ class SimulatedCOWHandler:
         entry.read_count += 1
 
         if entry.state == PageState.FULL_PAGE or entry.state == PageState.BASE_PAGE:
-            return entry.content
+            return bytearray(entry.content)
 
         elif entry.state == PageState.DELTA_PAGE:
-            base_content = self.cluster_bases[entry.cluster_id]
+            base_content = self.page_bases.get(entry.base_page_id, self.cluster_bases.get(entry.cluster_id))
             t0 = time.perf_counter_ns()
             reconstructed = self.delta_manager.reconstruct_page(base_content, entry.delta)
             lat_us = (time.perf_counter_ns() - t0) / 1000.0
@@ -164,7 +179,7 @@ class SimulatedCOWHandler:
         # Case 2: Page is DELTA_PAGE -> Copy-on-Write Write Fault
         elif entry.state == PageState.DELTA_PAGE:
             entry.cow_fault_count += 1
-            base_content = self.cluster_bases[entry.cluster_id]
+            base_content = self.page_bases.get(entry.base_page_id, self.cluster_bases.get(entry.cluster_id))
 
             # Reconstruct page from immutable base + delta
             t0 = time.perf_counter_ns()
