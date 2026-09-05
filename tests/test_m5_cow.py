@@ -165,5 +165,32 @@ def test_read_returns_defensive_copy():
     assert clean_read == base_content
 
 
+def test_isolated_timing_guard_and_gc_suppression():
+    """Verify isolated timing guard and disable_gc flags in read_page and measure_reconstruction_latency."""
+    generator = SyntheticWorkloadGenerator(seed=42)
+    m3_manager = BaseDeltaStorageManager()
+    cow_handler = SimulatedCOWHandler(delta_manager=m3_manager)
+
+    base_content = generator._create_template_page_content("heap_struct")
+    target_content = generator._mutate_page_content(base_content, 0.005)
+
+    pages = [
+        Page(page_id=0, region_id=0, content=bytearray(base_content), alloc_time=10.0, last_write_time=10.0),
+        Page(page_id=1, region_id=0, content=bytearray(target_content), alloc_time=10.0, last_write_time=10.0),
+    ]
+    cluster = SimilarityCluster(cluster_id=0, page_ids=[0, 1])
+    compressed_clusters, _ = m3_manager.compress_workload([cluster], pages)
+    cow_handler.populate_from_compressed_clusters(compressed_clusters, pages)
+
+    # Read with GC suppression enabled
+    read_delta = cow_handler.read_page(1, disable_gc=True)
+    assert read_delta == target_content
+
+    # Direct measurement helper
+    lat_us = cow_handler.measure_reconstruction_latency(1, disable_gc=True)
+    assert lat_us > 0.0
+    assert len(cow_handler.reconstruction_latencies_us) == 2
+
+
 if __name__ == "__main__":
     pytest.main(["-v", __file__])

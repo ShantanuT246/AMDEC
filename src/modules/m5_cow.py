@@ -8,7 +8,9 @@ latency distributions (Mean, Median, P95, P99), and updates dynamic M1 feedback.
 
 from dataclasses import dataclass, field
 from enum import Enum
+import gc
 import time
+from contextlib import contextmanager
 from typing import Any, Dict, List, Optional, Tuple, Union
 import numpy as np
 
@@ -124,17 +126,31 @@ class SimulatedCOWHandler:
                     cluster_id=-1,
                 )
 
-    def read_page(self, page_id: int) -> bytearray:
+    @staticmethod
+    @contextmanager
+    def isolated_timing_guard():
+        """
+        Context manager that temporarily disables Python garbage collection during
+        latency-sensitive timing windows and guarantees it is restored upon exit.
+        """
+        gc_was_enabled = gc.isenabled()
+        gc.disable()
+        try:
+            yield
+        finally:
+            if gc_was_enabled:
+                gc.enable()
+
+    def read_page(self, page_id: int, disable_gc: bool = False) -> bytearray:
         """
         Simulates read access to a page.
         If DELTA_PAGE, reconstructs content from base + delta and logs latency.
         Returns a defensive bytearray copy to prevent out-of-band page corruption.
 
-        NOTE on latency accuracy: Reconstruction latency is measured with
-        `time.perf_counter_ns()` but GC is NOT disabled here. For publication-grade
-        latency measurements, call this method within a `gc.disable()` / `gc.enable()`
-        context (as done in experiments/run_full_eval.py). Isolated unit test latencies
-        will include GC jitter.
+        Parameters:
+            page_id: Target page identifier.
+            disable_gc: If True, temporarily deactivates garbage collection during the
+                        microsecond timing window to eliminate interpreter GC jitter.
         """
         if page_id not in self.page_table:
             raise KeyError(f"Page #{page_id} not found in simulated page table")
@@ -147,14 +163,47 @@ class SimulatedCOWHandler:
 
         elif entry.state == PageState.DELTA_PAGE:
             base_content = self.page_bases.get(entry.base_page_id, self.cluster_bases.get(entry.cluster_id))
-            t0 = time.perf_counter_ns()
-            reconstructed = self.delta_manager.reconstruct_page(base_content, entry.delta)
-            lat_us = (time.perf_counter_ns() - t0) / 1000.0
+            if disable_gc:
+                with self.isolated_timing_guard():
+                    t0 = time.perf_counter_ns()
+                    reconstructed = self.delta_manager.reconstruct_page(base_content, entry.delta)
+                    lat_us = (time.perf_counter_ns() - t0) / 1000.0
+            else:
+                t0 = time.perf_counter_ns()
+                reconstructed = self.delta_manager.reconstruct_page(base_content, entry.delta)
+                lat_us = (time.perf_counter_ns() - t0) / 1000.0
+
             self.reconstruction_latencies_us.append(lat_us)
             return reconstructed
 
         else:
             raise RuntimeError(f"Unknown page state {entry.state}")
+
+    def measure_reconstruction_latency(self, page_id: int, disable_gc: bool = True) -> float:
+        """
+        Convenience method to measure isolated single-call reconstruction latency for a DELTA_PAGE
+        in microseconds, optionally suppressing GC jitter.
+        """
+        if page_id not in self.page_table:
+            raise KeyError(f"Page #{page_id} not found in simulated page table")
+        entry = self.page_table[page_id]
+        if entry.state != PageState.DELTA_PAGE:
+            raise ValueError(f"Page #{page_id} is in state {entry.state}, not DELTA_PAGE")
+
+        base_content = self.page_bases.get(entry.base_page_id, self.cluster_bases.get(entry.cluster_id))
+        if disable_gc:
+            with self.isolated_timing_guard():
+                t0 = time.perf_counter_ns()
+                _ = self.delta_manager.reconstruct_page(base_content, entry.delta)
+                t1 = time.perf_counter_ns()
+        else:
+            t0 = time.perf_counter_ns()
+            _ = self.delta_manager.reconstruct_page(base_content, entry.delta)
+            t1 = time.perf_counter_ns()
+
+        lat_us = (t1 - t0) / 1000.0
+        self.reconstruction_latencies_us.append(lat_us)
+        return lat_us
 
     def handle_write_fault(
         self,
@@ -162,6 +211,7 @@ class SimulatedCOWHandler:
         offset: int,
         data: bytes,
         current_time: float,
+        disable_gc: bool = False,
     ) -> bytearray:
         """
         Simulates a write access to a page, triggering Copy-on-Write (COW) fault
@@ -187,9 +237,16 @@ class SimulatedCOWHandler:
             base_content = self.page_bases.get(entry.base_page_id, self.cluster_bases.get(entry.cluster_id))
 
             # Reconstruct page from immutable base + delta
-            t0 = time.perf_counter_ns()
-            reconstructed = self.delta_manager.reconstruct_page(base_content, entry.delta)
-            lat_us = (time.perf_counter_ns() - t0) / 1000.0
+            if disable_gc:
+                with self.isolated_timing_guard():
+                    t0 = time.perf_counter_ns()
+                    reconstructed = self.delta_manager.reconstruct_page(base_content, entry.delta)
+                    lat_us = (time.perf_counter_ns() - t0) / 1000.0
+            else:
+                t0 = time.perf_counter_ns()
+                reconstructed = self.delta_manager.reconstruct_page(base_content, entry.delta)
+                lat_us = (time.perf_counter_ns() - t0) / 1000.0
+
             self.reconstruction_latencies_us.append(lat_us)
 
             # Allocate private page copy, apply write, and update state to FULL_PAGE

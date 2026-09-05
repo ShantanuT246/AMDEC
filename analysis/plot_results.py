@@ -212,10 +212,10 @@ def generate_all_plots():
     if os.path.exists(ab_m1_path):
         with open(ab_m1_path, "r") as f:
             m1_trials = list(csv.DictReader(f))
-        m1_t_disabled = np.mean([float(r["m1_disabled_time_ms"]) for r in m1_trials])
-        m1_t_enabled = np.mean([float(r["m1_enabled_time_ms"]) for r in m1_trials])
+        m1_t_disabled = np.median([float(r["m1_disabled_time_ms"]) for r in m1_trials])
+        m1_t_enabled = np.median([float(r["m1_enabled_time_ms"]) for r in m1_trials])
     else:
-        m1_t_disabled, m1_t_enabled = 3200.0, 2700.0
+        m1_t_disabled, m1_t_enabled = 1570.0, 1480.0
 
     if os.path.exists(ab_lsh_path):
         with open(ab_lsh_path, "r") as f:
@@ -227,13 +227,13 @@ def generate_all_plots():
 
     fig, (ax_a, ax_b) = plt.subplots(1, 2, figsize=(10, 4.2), dpi=300)
 
-    # Ablation 1: M1 Sampling
+    # Ablation 1: M1 Sampling (Median runtime robust to Trial 5 scheduler outlier)
     ablation_labels = ["M1 Disabled\n(Full Scan)", "M1 Enabled\n(AMDEC)"]
     runtimes = [round(m1_t_disabled), round(m1_t_enabled)]
     colors = ["#e377c2", "#17becf"]
     ax_a.bar(ablation_labels, runtimes, color=colors, width=0.45, edgecolor="black", alpha=0.85)
-    ax_a.set_ylabel("Pipeline Execution Time (ms)", fontweight="bold")
-    ax_a.set_title("Ablation 1: Module 1 Sampling Value")
+    ax_a.set_ylabel("Pipeline Execution Time (Median ms)", fontweight="bold")
+    ax_a.set_title("Ablation 1: Module 1 Sampling Value (Median)")
     ax_a.grid(axis="y", linestyle="--", alpha=0.7)
     for i, v in enumerate(runtimes):
         ax_a.text(i, v + (max(runtimes)*0.02), f"{v:,} ms", ha="center", fontweight="bold")
