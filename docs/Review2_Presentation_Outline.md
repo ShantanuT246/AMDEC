@@ -39,17 +39,17 @@
 ### 1. Workload & Module 1 (Sampling Efficacy)
 - **Workload:** 10,000 pages (39.1 MB memory pool).
 - **Write Skew:** Zipfian distribution ($\alpha = 1.3$).
-- **Candidate Filtering:** Module 1 safely filters ~8% volatile hot pages, saving CPU scanning time.
+- **Candidate Filtering:** Module 1 safely filters 8.2% volatile hot pages (~820 pages skipped, 91.8% passed), saving CPU scanning time.
 
 ### 2. Module 2 (MinHash-LSH Clustering Efficacy)
-- **Search Space Reduction:** Eliminates **99.87%** of pairwise comparisons (evaluates ~56K candidate pairs instead of 42.7M brute-force pairs).
+- **Search Space Reduction:** Eliminates **99.85%** of pairwise comparisons (evaluates ~65.4K candidate pairs instead of 42.1M post-M1 possible pairs; 99.87% vs 50.0M un-filtered pairs).
 - **Clustering Throughput:** $>3,300\text{ pages/second}$ in Python.
 - **Cluster Quality:** **98.9% Ground-Truth Cluster Purity** (zero false-positive cross-cluster pollution).
 
 ### 3. Module 3 (Base-Delta Compression Efficacy)
-- **Logical Memory Savings:** **$74.3\%$** memory reduction ($3.9\times$ compression) on near-duplicate clusters.
+- **Logical Memory Savings:** **$73.6\%$** overall memory reduction ($3.79\times$ compression) across the full pipeline ($80.9\%$ on near-duplicate clusters).
 - **Reconstruction Fidelity:** $100\%$ byte-for-byte exact equality verified.
-- **Automated Tests:** **29/29 passing tests** in `pytest`.
+- **Automated Tests:** **37/37 passing tests** in `pytest`.
 
 ---
 
