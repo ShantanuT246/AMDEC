@@ -117,9 +117,23 @@ class BaseDeltaStorageManager:
         return spans
 
     def reconstruct_page(self, base_content: bytearray, delta: DeltaRecord) -> bytearray:
-        """Reconstructs the original 4096-byte page from base + delta record."""
-        reconstructed = bytearray(base_content)
+        """
+        Reconstructs the original 4096-byte page from base content + delta record.
+
+        Correctness invariant:
+            `reconstructed` starts as a byte-for-byte copy of `base_content`.
+            For each span: `reconstructed[i] XOR span.data[i]`
+                         = `base[i] XOR xor_diff[i]`
+                         = `base[i] XOR (original[i] XOR base[i])`
+                         = `original[i]`
+        IMPORTANT: Do NOT change `reconstructed[offset:...]` to `base_content[offset:...]`
+        in the zip() — they are equivalent only because `reconstructed` is an
+        independent copy of `base_content` at this point. If in-place patching is
+        ever introduced, this invariant must be re-verified.
+        """
+        reconstructed = bytearray(base_content)  # independent copy — do not reuse base_content directly
         for span in delta.spans:
+            # Apply: reconstructed[i] = base[i] ^ xor_diff[i] = original[i]
             reconstructed[span.offset : span.offset + span.length] = bytes(
                 a ^ b for a, b in zip(reconstructed[span.offset : span.offset + span.length], span.data)
             )

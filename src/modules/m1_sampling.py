@@ -128,8 +128,13 @@ class RegionSamplingEngine:
         pages: List[Page],
         current_time: float,
         include_warm: bool = True,
-        enable_region_filtering: bool = False,
-        max_candidates: Optional[int] = None,
+        enable_region_filtering: bool = False,  # NOTE: disabled in all current experiments.
+                                                # When True, entire volatile heap arenas are skipped
+                                                # before per-page classification. Activate for workloads
+                                                # with clearly distinct stable vs. volatile regions.
+        max_candidates: Optional[int] = None,   # NOTE: unused in current experiments (always None).
+                                                # When set, caps the number of candidates returned
+                                                # from the priority heap, limiting downstream M2 input.
     ) -> Tuple[List[PrioritizedCandidate], Dict[str, int]]:
         """
         Scans page set and filters out HOT pages and (optionally) volatile regions.

@@ -156,7 +156,7 @@ The **five-module AMDEC architecture** is organized into a primary storage pipel
 
 ### 4.3 Module 2: MinHash-LSH Clustering Engine (`src/modules/m2_lsh_clustering.py`)
 - **Page Chunking:** Splits 4096-byte pages into 32 128-byte non-overlapping chunks.
-- **MinHash Fingerprinting:** Computes $K=32$ 64-bit MinHash signature permutations per page.
+- **MinHash Fingerprinting:** Computes $K=32$ MinHash signature permutations per page using 32-bit hash values (via `datasketch.MinHash` default). Band bucket hashes are further reduced to 64-bit identifiers via MD5 truncation in `extract_band_buckets()`.
 - **LSH Banding Index:** Hashes signatures into $b=8$ bands ($r=4$ rows per band) to identify candidate similar pairs.
 - **Large-Bucket Exact-Hash Grouping:** In massive buckets ($>64$ pages), pages are pre-grouped by SHA-256 exact digest to prevent component fragmentation while spanning representatives maintain candidate pair generation.
 - **Verification & Union-Find:** Pairs meeting $J \ge 0.70$ are verified and merged using a disjoint-set data structure with path compression and rank optimization.
@@ -221,7 +221,7 @@ Evaluated across 10 randomized trials (seeds 42–51) on $N = 10,000$ pages ($39
 
 | Metric | Measured Result (Mean ± Std) | 95% Confidence Interval | Median [Min, Max] | Notes / Context |
 |---|---|---|---|---|
-| **Baseline Uncompressed Footprint** | $39.06\text{ MB}$ (Fixed) | [Fixed Baseline] | $39.06\text{ MB}$ | Raw unshared allocation ($40.96\text{ MB}$) |
+| **Baseline Uncompressed Footprint** | $39.06\text{ MiB}$ (Fixed) | [Fixed Baseline] | $39.06\text{ MiB}$ | $N \times 4096\text{ B} = 40,960,000\text{ bytes}$ ($39.06\text{ MiB}$ binary / $40.96\text{ MB}$ SI-decimal) |
 | **AMDEC Logical Footprint** | **$10.31 \pm 0.32\text{ MB}$** | **[10.08, 10.55] MB** | $10.30\ [9.90, 10.85]$ | Base pages + deltas + metadata |
 | **Logical Memory Savings** | **$73.60\% \pm 0.83\%$** | **[73.00%, 74.19%]** | **73.64% [72.21%, 74.67%]** | Evaluated synthetic workload |
 | **Effective Compression Ratio** | **$3.79\times \pm 0.12\times$** | **[3.71x, 3.88x]** | $3.79\times\ [3.60\times, 3.95\times]$ | Ratio of baseline to logical footprint |
@@ -328,7 +328,7 @@ Evaluated across scale points $N = 1,000, 2,500, 5,000, 10,000$ with a 15-second
 | **Fig 3** | `fig3_reconstruction_latency_cdf.png` | High-res Empirical CDF with Median (P50), P95, and P99 threshold lines (Pooled 7,000 samples) | Distribution of simulated page reconstruction latencies ($P50 = 1.58\ \mu\text{s}$, $P95 = 3.88\ \mu\text{s}$, $P99 = 4.58\ \mu\text{s}$). |
 | **Fig 4** | `fig4_ablation_comparison.png` | Dual subplot: M1 candidate filtering & LSH search space reduction | Shows M1 filters 7.1% volatile pages and LSH reduces candidate pairs by 98.1%–99.8%. |
 | **Fig 5** | `fig5_acceleration_throughput.png` | Throughput comparison: Scalar Python loop vs NumPy uint64 vectorized diff | Demonstrates $198.0\times$ speedup of NumPy uint64 vectorized differencing over scalar Python implementation. |
-| **Fig 6** | `fig6_scalability_throughput.png` | Dual-axis scalability: $1\text{K} \to 20\text{K}$ pages vs Runtime (ms) & Pages/sec (with 95% CI error bars) | Sub-quadratic candidate indexing scaling over tested workload range. |
+| **Fig 6** | `fig6_scalability_throughput.png` | Dual-axis scalability: $1\text{K} \to 20\text{K}$ pages vs Runtime (ms) \& Pages/sec (with 95% CI error bars) | Sub-quadratic candidate indexing scaling over tested workload range. Data for $N \le 10{,}000$ from `experiments/lsh_scalability.py`; $N = 15{,}000$ and $N = 20{,}000$ data points from `experiments/parameter_sweep.py` scalability sweep. |
 | **Fig 7** | `fig7_delta_size_distribution.png` | Boxplot vs 4096B page + Delta size frequency histogram | Median delta footprint is $24.2\text{ bytes}$ compared to 4096B uncompressed frames. |
 | **Fig 8** | `fig8_stability_tier_skew.png` | Stacked bar chart: COLD vs WARM vs HOT across Zipf skew ($\alpha=0.6 \to 1.8$) | Module 1 tier classification under varying Zipf write traffic skew. |
 | **Fig 9** | `fig9_literature_comparison_bars.png` | Footprint comparison: Uncompressed vs KSM vs UKSM vs Difference Engine vs AMDEC | Conceptual comparison of logical footprint vs values reported in prior literature. |
@@ -339,7 +339,7 @@ Evaluated across scale points $N = 1,000, 2,500, 5,000, 10,000$ with a 15-second
 
 ### 7.1 Ablation Study 1: Module 1 Sampling Efficacy (`experiments/ablation_m1.py` & `benchmark_m1_isolated.py`)
 - **Comparison:** AMDEC with M1 Enabled vs. AMDEC with M1 Disabled (Uniform Full Scan).
-- **Results:** M1 filtered **$710\text{ volatile hot pages}$** ($7.1\%$), excluding them from downstream LSH pair generation and preventing immediate COW-break thrashing. M1 introduces ~25ms classification overhead per full scan.
+- **Results:** M1 filtered **$710\text{ volatile hot pages}$** ($7.1\%$), excluding them from downstream LSH pair generation and preventing immediate COW-break thrashing. M1 introduces ~25ms classification overhead per full scan. *(Note: `ablation_m1.py` uses `zipf_param=1.3`, aligned with the primary evaluation configuration.)*
 
 ### 7.2 Ablation Study 2: Adaptive vs. Fixed Delta Thresholding (`experiments/ablation_delta.py` & `ablation_delta_adversarial.py`)
 - **Comparison:** Adaptive Fallback ($\delta_{\text{max}} = 0.30$) vs. Fixed/No Fallback ($\delta_{\text{max}} = 1.0$).
@@ -491,7 +491,7 @@ AMDEC's byte-level XOR differencing assumes pages mutate _in-place_ at fixed byt
 
 **T2 — Transitive Cluster Divergence (Union-Find Single-Linkage)**  
 Union-Find clustering exhibits single-linkage behavior: if A is similar to B ($J=0.75$) and B is similar to C ($J=0.75$), A and C may reside in the same cluster even if $J(A,C)<0.70$. Delta-compressing C against primary medoid A would yield an excessively large delta record.  
-*Mitigation Implemented:* Secondary-Base Sub-Clustering (`src/modules/m3_delta_storage.py`). When any cluster member's delta against the primary medoid exceeds the 30% delta threshold ($\delta > 1228\text{B}$), AMDEC designates the most divergent member as a secondary base within the cluster. Remaining divergent members are re-evaluated against the secondary base, forming a compact sub-cluster delta and recording the sub-base assignment in `M5_COWHandler.page_bases` rather than falling back to uncompressed storage.
+*Mitigation Implemented:* Secondary-Base Sub-Clustering (`src/modules/m3_delta_storage.py`). When any cluster member's delta against the primary medoid exceeds the 30% delta threshold ($\delta > 1228\text{B}$), AMDEC selects the **medoid** (minimum total pairwise byte distance) of the divergent pages as a secondary base within the cluster. Remaining divergent members are re-evaluated against the secondary base, forming a compact sub-cluster delta and recording the sub-base assignment in `SimulatedCOWHandler.page_bases` rather than falling back to uncompressed storage.
 
 ### 11.2 External Validity
 

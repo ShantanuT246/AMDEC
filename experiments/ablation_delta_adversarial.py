@@ -13,6 +13,8 @@ Uses identical workloads for both configurations (paired comparison).
 import argparse
 import csv
 import os
+import random as _random
+import struct
 import sys
 import time
 from typing import Any, Dict, List
@@ -42,9 +44,7 @@ def _build_adversarial_workload(seed: int, num_pages: int, mutation_rate: float)
     # Now re-mutate all near-duplicate pages at the specified mutation_rate
     # We need a fresh RNG for the re-mutation to be deterministic per seed
     mut_rng = np.random.default_rng(seed + 10000)
-    import random as _random
     mut_py_rng = _random.Random(seed + 10000)
-    import struct
 
     for p in pages:
         if p.metadata.get("type") == "near_duplicate":

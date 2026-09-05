@@ -38,7 +38,7 @@ def run_ablation_m1(num_pages: int = 5000, num_trials: int = 5, initial_seed: in
 
     for t_idx in range(num_trials):
         seed = initial_seed + t_idx
-        generator = SyntheticWorkloadGenerator(seed=seed, zipf_param=1.4)
+        generator = SyntheticWorkloadGenerator(seed=seed, zipf_param=1.3)  # aligned with primary evaluation config
         pages = generator.generate_workload(num_pages=num_pages)
         sim_end_time = generator.simulate_write_traffic(pages, num_ticks=40, writes_per_tick=200, current_time=100.0)
 

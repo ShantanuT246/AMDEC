@@ -77,7 +77,7 @@ class AccelerationBenchmark:
         t0 = time.perf_counter()
         for _ in range(num_iterations):
             for target in target_contents:
-                _ = self.diff_scalar_python(target, base_content)
+                self.diff_scalar_python(target, base_content)
         t_scalar_ms = (time.perf_counter() - t0) * 1000.0
 
         lat_scalar_us = (t_scalar_ms * 1000.0) / num_diffs
@@ -87,7 +87,7 @@ class AccelerationBenchmark:
         t0 = time.perf_counter()
         for _ in range(num_iterations):
             for target in target_contents:
-                _ = self.diff_vectorized_numpy(target, base_content)
+                self.diff_vectorized_numpy(target, base_content)
         t_vector_ms = (time.perf_counter() - t0) * 1000.0
 
         lat_vector_us = (t_vector_ms * 1000.0) / num_diffs

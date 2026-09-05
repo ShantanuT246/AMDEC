@@ -8,7 +8,6 @@ latency distributions (Mean, Median, P95, P99), and updates dynamic M1 feedback.
 
 from dataclasses import dataclass, field
 from enum import Enum
-import struct
 import time
 from typing import Any, Dict, List, Optional, Tuple, Union
 import numpy as np
@@ -100,7 +99,7 @@ class SimulatedCOWHandler:
                     page_id=page_id,
                     state=PageState.DELTA_PAGE,
                     delta=delta,
-                    base_page_id=delta.base_page_id if hasattr(delta, "base_page_id") else cc.base_page_id,
+                    base_page_id=delta.base_page_id,  # DeltaRecord always has base_page_id
                     cluster_id=cc.cluster_id,
                 )
                 accounted_page_ids.add(page_id)
@@ -130,6 +129,12 @@ class SimulatedCOWHandler:
         Simulates read access to a page.
         If DELTA_PAGE, reconstructs content from base + delta and logs latency.
         Returns a defensive bytearray copy to prevent out-of-band page corruption.
+
+        NOTE on latency accuracy: Reconstruction latency is measured with
+        `time.perf_counter_ns()` but GC is NOT disabled here. For publication-grade
+        latency measurements, call this method within a `gc.disable()` / `gc.enable()`
+        context (as done in experiments/run_full_eval.py). Isolated unit test latencies
+        will include GC jitter.
         """
         if page_id not in self.page_table:
             raise KeyError(f"Page #{page_id} not found in simulated page table")
